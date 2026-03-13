@@ -263,14 +263,51 @@ export async function deployFilesToVercel(
 ): Promise<{ deploymentUrl: string }> {
   console.log(`[vercel] Deploying ${files.length} files to project ${projectId}`);
 
+  // Step 1: Upload each file to /v2/files and get SHA
+  const fileRefs: Array<{ file: string; sha: string; size: number }> = [];
+
+  for (const f of files) {
+    const content = Buffer.from(f.data, 'base64');
+    const sha = await import('crypto').then(c =>
+      c.createHash('sha1').update(content).digest('hex')
+    );
+
+    // Upload file content
+    const teamParam = process.env.VERCEL_TEAM_ID ? `?teamId=${process.env.VERCEL_TEAM_ID}` : '';
+    const uploadRes = await fetch(`https://api.vercel.com/v2/files${teamParam}`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${process.env.VERCEL_TOKEN}`,
+        'Content-Type': 'application/octet-stream',
+        'Content-Length': String(content.length),
+        'x-vercel-digest': sha,
+      },
+      body: content,
+    });
+
+    if (!uploadRes.ok && uploadRes.status !== 409) {
+      // 409 = file already exists (fine)
+      const errText = await uploadRes.text().catch(() => '');
+      console.warn(`[vercel] File upload warning for ${f.file}: ${uploadRes.status} ${errText}`);
+    }
+
+    fileRefs.push({ file: f.file, sha, size: content.length });
+  }
+
+  console.log(`[vercel] Uploaded ${fileRefs.length} files, creating deployment...`);
+
+  // Step 2: Create deployment referencing uploaded files
   const deployment = await vercelRequest<VercelDeploymentCreateResponse>(
     'POST',
     '/v13/deployments',
     {
       name: projectName,
-      files,
+      files: fileRefs,
       projectId,
       target: 'production',
+      projectSettings: {
+        framework: null, // Static site, no framework
+      },
     }
   );
 
