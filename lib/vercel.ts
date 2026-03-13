@@ -135,7 +135,7 @@ async function execInBuildContainer(cmd: string): Promise<ExecResponse> {
     throw new Error('EXEC_SECRET environment variable is not set');
   }
 
-  const response = await fetch(`${BUILD_CONTAINER_HOST}/exec`, {
+  const response = await fetch(`http://${BUILD_CONTAINER_HOST}/exec`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ secret: EXEC_SECRET, cmd }),
