@@ -184,7 +184,7 @@ export async function createVercelProject(
 
   const project = await vercelRequest<VercelProject>('POST', '/v10/projects', {
     name: projectName,
-    framework: 'nextjs',
+    framework: null, // Static site — we upload pre-built files
   });
 
   console.log(`[vercel] Created project: ${project.id}`);
