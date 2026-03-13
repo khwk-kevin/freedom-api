@@ -1,0 +1,58 @@
+# ============================================================
+# Freedom World — Build Container
+# ============================================================
+# Single shared Railway service for compiling merchant Next.js apps.
+#
+# Pipeline: API SSH → git clone → npm install → Claude Code → npm run build → git push
+#
+# Usage:
+#   docker build -f Dockerfile.build-container -t freedom-build-container .
+#   docker run -e ANTHROPIC_API_KEY=... -e GITHUB_TOKEN=... freedom-build-container
+# ============================================================
+
+FROM node:20-bookworm-slim
+
+# ── System dependencies ──────────────────────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    curl \
+    ca-certificates \
+    openssh-client \
+    coreutils \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Global npm tools ─────────────────────────────────────────
+# Claude Code CLI — the AI build engine
+# railway CLI — installed on API side, NOT needed here
+RUN npm install -g \
+    @anthropic-ai/claude-code \
+    && npm cache clean --force
+
+# ── Git configuration ────────────────────────────────────────
+# Set a default identity for automated commits (overridable at runtime)
+RUN git config --global user.email "build@freedom.world" \
+    && git config --global user.name "Freedom Build Bot" \
+    && git config --global --add safe.directory '*' \
+    && git config --global credential.helper "" \
+    && git config --global init.defaultBranch main
+
+# ── Workspace setup ──────────────────────────────────────────
+# /workspace/builds/<merchantId> — where merchant repos are cloned and built
+RUN mkdir -p /workspace/builds
+
+WORKDIR /workspace
+
+# ── Runtime environment defaults ─────────────────────────────
+ENV NODE_ENV=production
+# ANTHROPIC_API_KEY — must be injected via Railway env vars
+# GITHUB_TOKEN      — must be injected via Railway env vars
+
+# ── Health check ─────────────────────────────────────────────
+# Verifies all required tools are present on startup
+HEALTHCHECK --interval=60s --timeout=10s --retries=3 \
+    CMD node --version && git --version && claude --version || exit 1
+
+# ── Entrypoint ───────────────────────────────────────────────
+# The container stays alive; all work is triggered via Railway SSH exec.
+# The API server calls: railway ssh --project ... --service ... -- sh -c "<cmd>"
+CMD ["sleep", "infinity"]
