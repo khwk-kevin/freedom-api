@@ -7,6 +7,9 @@
  * then the result is pushed to GitHub → Vercel auto-deploys.
  *
  * Env vars: BUILD_SERVICE_PROJECT_ID, BUILD_SERVICE_ID
+ * Auth: Uses Anthropic OAuth tokens with automatic fallback rotation.
+ *   ANTHROPIC_TOKEN_1..4 env vars (sk-ant-oat01-...) tried in order.
+ *   Falls back to ANTHROPIC_API_KEY if no numbered tokens are set.
  */
 
 import { sshExecCommand, sshWriteFile } from './app-builder/railway';
@@ -17,6 +20,65 @@ import { sshExecCommand, sshWriteFile } from './app-builder/railway';
 
 const BUILD_PROJECT_ID = process.env.BUILD_SERVICE_PROJECT_ID ?? '';
 const BUILD_SERVICE_ID = process.env.BUILD_SERVICE_ID ?? '';
+
+// ============================================================
+// ANTHROPIC OAUTH TOKEN ROTATION
+// ============================================================
+
+/**
+ * Load all available Anthropic tokens in priority order.
+ * Env vars: ANTHROPIC_TOKEN_1, ANTHROPIC_TOKEN_2, ANTHROPIC_TOKEN_3, ANTHROPIC_TOKEN_4
+ * Fallback: ANTHROPIC_API_KEY
+ */
+function getAnthropicTokens(): string[] {
+  const tokens: string[] = [];
+  for (let i = 1; i <= 4; i++) {
+    const t = process.env[`ANTHROPIC_TOKEN_${i}`];
+    if (t) tokens.push(t);
+  }
+  // Fallback to single API key
+  if (tokens.length === 0 && process.env.ANTHROPIC_API_KEY) {
+    tokens.push(process.env.ANTHROPIC_API_KEY);
+  }
+  return tokens;
+}
+
+/** Track which token index to start with (round-robin) */
+let nextTokenIndex = 0;
+
+/**
+ * Returns the next token to try, cycling through available tokens.
+ * On rate limit/auth failure, call advanceToken() then retry.
+ */
+function getNextToken(): { token: string; index: number } {
+  const tokens = getAnthropicTokens();
+  if (tokens.length === 0) {
+    throw new Error('No Anthropic tokens configured. Set ANTHROPIC_TOKEN_1..4 or ANTHROPIC_API_KEY.');
+  }
+  const index = nextTokenIndex % tokens.length;
+  return { token: tokens[index], index };
+}
+
+function advanceToken(): void {
+  nextTokenIndex++;
+}
+
+/** Check if an error suggests we should try a different token */
+function isTokenRotatableError(stderr: string): boolean {
+  const lower = stderr.toLowerCase();
+  return (
+    lower.includes('rate limit') ||
+    lower.includes('rate_limit') ||
+    lower.includes('429') ||
+    lower.includes('overloaded') ||
+    lower.includes('unauthorized') ||
+    lower.includes('401') ||
+    lower.includes('invalid_api_key') ||
+    lower.includes('authentication') ||
+    lower.includes('credit') ||
+    lower.includes('quota')
+  );
+}
 
 // ============================================================
 // PUBLIC API
@@ -107,17 +169,53 @@ export async function runClaudeCodeBuild(
 ): Promise<{ success: boolean; stdout: string; stderr: string; exitCode: number }> {
   const { projectId, serviceId } = getBuildService();
   const buildDir = `/workspace/builds/${merchantId}`;
+  const tokens = getAnthropicTokens();
+  const maxAttempts = Math.min(tokens.length, 4); // Try up to 4 different tokens
 
   const escapedPrompt = prompt.replace(/"/g, '\\"');
-  const cmd = `claude -p "${escapedPrompt}" --dangerously-skip-permissions --max-turns 100 --cwd ${buildDir}`;
 
-  const result = await sshExecCommand(projectId, serviceId, cmd);
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const { token, index } = getNextToken();
+    console.log(`[build-service] Claude Code build attempt ${attempt + 1}/${maxAttempts} (token #${index + 1})`);
 
+    // Inject the OAuth token as env var prefix so Claude Code uses it
+    const cmd = `ANTHROPIC_API_KEY=${token} claude -p "${escapedPrompt}" --dangerously-skip-permissions --max-turns 100 --cwd ${buildDir}`;
+
+    const result = await sshExecCommand(projectId, serviceId, cmd);
+
+    if (result.exitCode === 0) {
+      return {
+        success: true,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exitCode: 0,
+      };
+    }
+
+    // Check if this is a token-related error worth rotating
+    if (isTokenRotatableError(result.stderr) && attempt < maxAttempts - 1) {
+      console.warn(
+        `[build-service] Token #${index + 1} hit rate limit/auth error. Rotating to next token.`
+      );
+      advanceToken();
+      continue;
+    }
+
+    // Non-token error (build logic failure) — don't rotate, return as-is
+    return {
+      success: false,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+    };
+  }
+
+  // All tokens exhausted
   return {
-    success: result.exitCode === 0,
-    stdout: result.stdout,
-    stderr: result.stderr,
-    exitCode: result.exitCode,
+    success: false,
+    stdout: '',
+    stderr: 'All Anthropic OAuth tokens exhausted (rate limited or auth failed)',
+    exitCode: 1,
   };
 }
 
