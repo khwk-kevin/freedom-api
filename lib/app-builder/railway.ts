@@ -8,11 +8,7 @@
  * SSH exec is the core primitive — all Claude Code build tasks go through it.
  */
 
-import { execFile, exec as execCallback } from 'child_process';
-import { promisify } from 'util';
 
-const execFileAsync = promisify(execFile);
-const execAsync = promisify(execCallback);
 
 // ============================================================
 // CONFIGURATION
@@ -799,8 +795,13 @@ export async function deleteProject(projectId: string): Promise<void> {
 }
 
 // ============================================================
-// SSH FUNCTIONS — Core primitive for Claude Code build tasks
+// HTTP EXEC FUNCTIONS — Core primitive for Claude Code build tasks
 // ============================================================
+
+// Build container host (Railway private network domain)
+// e.g. "build-container.railway.internal:3000"
+const BUILD_CONTAINER_HOST = process.env.BUILD_CONTAINER_HOST ?? '';
+const EXEC_SECRET = process.env.EXEC_SECRET ?? '';
 
 export interface SshResult {
   stdout: string;
@@ -809,31 +810,72 @@ export interface SshResult {
 }
 
 /**
- * Executes a command inside a Railway service container via SSH.
- * Uses `railway ssh` CLI. If Railway CLI is unavailable, falls back
- * to Railway's exec API endpoint.
+ * Executes a command inside the Railway build container via HTTP.
+ * Sends a POST request to the exec-server running in the build container.
  *
  * THIS IS THE CORE PRIMITIVE — all Claude Code build tasks go through this.
+ *
+ * @param projectId  Unused (kept for caller compatibility)
+ * @param serviceId  Unused (kept for caller compatibility)
+ * @param cmd        Shell command to run
  */
 export async function sshExecCommand(
   projectId: string,
   serviceId: string,
   cmd: string
 ): Promise<SshResult> {
-  // First, check if railway CLI is available
-  const railwayCli = await getRailwayCliPath();
+  if (!BUILD_CONTAINER_HOST) {
+    return {
+      stdout: '',
+      stderr: 'BUILD_CONTAINER_HOST env var is not set',
+      exitCode: 1,
+    };
+  }
 
-  if (railwayCli) {
-    return sshExecViaCli(railwayCli, projectId, serviceId, cmd);
-  } else {
-    // Fallback: Railway exec API
-    return sshExecViaApi(projectId, serviceId, cmd);
+  try {
+    const response = await fetch(`http://${BUILD_CONTAINER_HOST}/exec`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        secret: EXEC_SECRET,
+        cmd,
+        timeout: 600_000, // 10 minutes
+      }),
+      signal: AbortSignal.timeout(620_000), // slightly longer than command timeout
+    });
+
+    if (response.status === 401) {
+      return { stdout: '', stderr: 'Exec server: Unauthorized (check EXEC_SECRET)', exitCode: 1 };
+    }
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      return { stdout: '', stderr: `Exec server HTTP error ${response.status}: ${body}`, exitCode: 1 };
+    }
+
+    const result = await response.json() as { stdout?: string; stderr?: string; exitCode?: number };
+    return {
+      stdout: result.stdout ?? '',
+      stderr: result.stderr ?? '',
+      exitCode: result.exitCode ?? 0,
+    };
+  } catch (err: unknown) {
+    return {
+      stdout: '',
+      stderr: `Failed to reach exec server at ${BUILD_CONTAINER_HOST}: ${String(err)}`,
+      exitCode: 1,
+    };
   }
 }
 
 /**
- * Writes a file into a Railway service container via SSH.
- * Uses cat with heredoc syntax to write content.
+ * Writes a file into the Railway build container via HTTP.
+ * Content is base64-encoded and sent to the exec-server's /write-file endpoint.
+ *
+ * @param projectId  Unused (kept for caller compatibility)
+ * @param serviceId  Unused (kept for caller compatibility)
+ * @param path       Absolute path inside the container
+ * @param content    UTF-8 file content (will be base64-encoded for transport)
  */
 export async function sshWriteFile(
   projectId: string,
@@ -841,149 +883,36 @@ export async function sshWriteFile(
   path: string,
   content: string
 ): Promise<void> {
-  // Ensure parent directory exists
-  const dir = path.substring(0, path.lastIndexOf('/'));
-  if (dir) {
-    await sshExecCommand(projectId, serviceId, `mkdir -p "${dir}"`);
+  if (!BUILD_CONTAINER_HOST) {
+    throw new Error('BUILD_CONTAINER_HOST env var is not set');
   }
 
-  // Write file content using base64 to avoid shell escaping issues
   const base64Content = Buffer.from(content, 'utf-8').toString('base64');
-  const writeCmd = `echo '${base64Content}' | base64 -d > "${path}"`;
 
-  const result = await sshExecCommand(projectId, serviceId, writeCmd);
+  const response = await fetch(`http://${BUILD_CONTAINER_HOST}/write-file`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      secret: EXEC_SECRET,
+      path,
+      content: base64Content,
+    }),
+    signal: AbortSignal.timeout(60_000),
+  });
 
-  if (result.exitCode !== 0) {
-    throw new Error(
-      `sshWriteFile failed for ${path}: ${result.stderr || result.stdout}`
-    );
-  }
-}
-
-// ============================================================
-// SSH IMPLEMENTATION — CLI path
-// ============================================================
-
-async function getRailwayCliPath(): Promise<string | null> {
-  try {
-    const { stdout } = await execAsync('which railway', { timeout: 5000 });
-    const path = stdout.trim();
-    return path.length > 0 ? path : null;
-  } catch {
-    return null;
-  }
-}
-
-async function sshExecViaCli(
-  railwayCli: string,
-  projectId: string,
-  serviceId: string,
-  cmd: string
-): Promise<SshResult> {
-  // Sanitize cmd for shell safety — wrap in sh -c
-  // Command format: railway ssh --project {id} --service {id} -- sh -c "cmd"
-  const environmentId = process.env.RAILWAY_ENVIRONMENT_ID ?? '';
-  const args = [
-    'ssh',
-    '--project', projectId,
-    '--service', serviceId,
-    ...(environmentId ? ['--environment', environmentId] : []),
-    '--',
-    'sh', '-c', cmd,
-  ];
-
-  try {
-    const { stdout, stderr } = await execFileAsync(railwayCli, args, {
-      timeout: 600_000, // 10 minutes for Claude Code tasks
-      env: {
-        ...process.env,
-        RAILWAY_TOKEN: RAILWAY_API_TOKEN,
-      },
-      maxBuffer: 50 * 1024 * 1024, // 50MB output buffer
-    });
-
-    return {
-      stdout: stdout ?? '',
-      stderr: stderr ?? '',
-      exitCode: 0,
-    };
-  } catch (err: unknown) {
-    const error = err as {
-      stdout?: string;
-      stderr?: string;
-      code?: number;
-      signal?: string;
-      killed?: boolean;
-    };
-
-    return {
-      stdout: error.stdout ?? '',
-      stderr: error.stderr ?? String(err),
-      exitCode: error.code ?? 1,
-    };
-  }
-}
-
-// ============================================================
-// SSH IMPLEMENTATION — API fallback (Railway WebSocket exec)
-// ============================================================
-
-async function sshExecViaApi(
-  projectId: string,
-  serviceId: string,
-  cmd: string
-): Promise<SshResult> {
-  // Railway doesn't have a direct REST exec API, but we can use their
-  // deployments API to get exec access via the "exec" endpoint.
-  // Reference: https://docs.railway.com/reference/public-api
-  //
-  // As a pragmatic fallback, we use Railway's service logs to monitor
-  // command execution. We inject a wrapper script that:
-  // 1. Runs the command
-  // 2. Writes exit code to a known temp file
-  //
-  // However, the most reliable approach without CLI is to use
-  // Railway's WebSocket-based exec which requires a token exchange.
-  // For now, we return an error so the caller knows to install the CLI.
-
-  console.warn(
-    '[Railway] CLI not found. Please install: npm install -g @railway/cli'
-  );
-
-  // Attempt via Railway's HTTP API for simple commands
-  // This is a best-effort fallback using Railway's deployment exec
-  try {
-    const response = await fetch(
-      `https://backboard.railway.app/project/${projectId}/environment/production/service/${serviceId}/exec`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${RAILWAY_API_TOKEN}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ command: ['sh', '-c', cmd] }),
-        signal: AbortSignal.timeout(120_000),
-      }
-    );
-
-    if (response.ok) {
-      const result = await response.json() as { stdout?: string; stderr?: string; exitCode?: number };
-      return {
-        stdout: result.stdout ?? '',
-        stderr: result.stderr ?? '',
-        exitCode: result.exitCode ?? 0,
-      };
-    }
-  } catch {
-    // Fallback failed
+  if (response.status === 401) {
+    throw new Error('Exec server: Unauthorized (check EXEC_SECRET)');
   }
 
-  return {
-    stdout: '',
-    stderr:
-      'Railway CLI not installed and API exec fallback unavailable. Install: npm install -g @railway/cli',
-    exitCode: 127,
-  };
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    throw new Error(`sshWriteFile failed for ${path}: HTTP ${response.status} — ${body}`);
+  }
+
+  const result = await response.json() as { ok?: boolean; error?: string };
+  if (!result.ok) {
+    throw new Error(`sshWriteFile failed for ${path}: ${result.error ?? 'unknown error'}`);
+  }
 }
 
 // ============================================================

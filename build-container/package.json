@@ -1,0 +1,18 @@
+{
+  "name": "freedom-build-container",
+  "version": "1.0.0",
+  "description": "HTTP exec server for Railway build container",
+  "main": "exec-server.ts",
+  "scripts": {
+    "start": "npx ts-node exec-server.ts"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.11.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  }
+}
