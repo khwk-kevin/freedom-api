@@ -137,6 +137,8 @@ router.post('/', async (req: Request, res: Response) => {
     const exists = await repoExists(merchantId);
     if (!exists) {
       await createMerchantRepo(merchantId, appSpec.identity.category || 'business');
+      // GitHub template generation is async — wait for files to be ready
+      await new Promise(resolve => setTimeout(resolve, 8000));
     }
 
     sendSSE(res, {
