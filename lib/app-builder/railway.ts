@@ -882,10 +882,12 @@ async function sshExecViaCli(
 ): Promise<SshResult> {
   // Sanitize cmd for shell safety — wrap in sh -c
   // Command format: railway ssh --project {id} --service {id} -- sh -c "cmd"
+  const environmentId = process.env.RAILWAY_ENVIRONMENT_ID ?? '';
   const args = [
     'ssh',
     '--project', projectId,
     '--service', serviceId,
+    ...(environmentId ? ['--environment', environmentId] : []),
     '--',
     'sh', '-c', cmd,
   ];
