@@ -2,10 +2,10 @@
  * Freedom World — Vercel Project Management Client
  * Sprint 2A — Vercel REST API
  *
- * Programmatic project creation, domain assignment, deployment status.
+ * Programmatic project creation, domain assignment, deployment via direct file upload.
  * Used to deploy merchant app static frontends to Vercel.
  *
- * Env vars: VERCEL_TOKEN, VERCEL_TEAM_ID (optional)
+ * Env vars: VERCEL_TOKEN, VERCEL_TEAM_ID (optional), BUILD_CONTAINER_HOST, EXEC_SECRET
  */
 
 // ============================================================
@@ -15,6 +15,9 @@
 const VERCEL_API_URL = 'https://api.vercel.com';
 const VERCEL_TOKEN = process.env.VERCEL_TOKEN ?? '';
 const VERCEL_TEAM_ID = process.env.VERCEL_TEAM_ID ?? '';
+
+const BUILD_CONTAINER_HOST = process.env.BUILD_CONTAINER_HOST ?? '';
+const EXEC_SECRET = process.env.EXEC_SECRET ?? '';
 
 // ============================================================
 // TYPES
@@ -53,6 +56,23 @@ interface VercelDeployment {
   readyState?: string;
   ready?: number;
   createdAt: number;
+}
+
+interface VercelDeploymentCreateResponse {
+  id: string;
+  url: string;
+  readyState: string;
+}
+
+interface ExecResponse {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}
+
+export interface VercelFile {
+  file: string;
+  data: string;
 }
 
 // ============================================================
@@ -104,21 +124,49 @@ async function vercelRequest<T>(
 }
 
 // ============================================================
+// CORE: Build container exec helper
+// ============================================================
+
+async function execInBuildContainer(cmd: string): Promise<ExecResponse> {
+  if (!BUILD_CONTAINER_HOST) {
+    throw new Error('BUILD_CONTAINER_HOST environment variable is not set');
+  }
+  if (!EXEC_SECRET) {
+    throw new Error('EXEC_SECRET environment variable is not set');
+  }
+
+  const response = await fetch(`${BUILD_CONTAINER_HOST}/exec`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ secret: EXEC_SECRET, cmd }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Build container exec failed: ${response.status} ${response.statusText}`);
+  }
+
+  return (await response.json()) as ExecResponse;
+}
+
+// ============================================================
 // PUBLIC API
 // ============================================================
 
 /**
- * Creates a Vercel project linked to a GitHub repo.
+ * Creates a Vercel project (without GitHub linking).
  * Idempotent: if project already exists, returns existing project.
  *
- * @param slug             Merchant slug (project name: fw-app-{slug})
- * @param githubRepoFullName  e.g. "khwk-kevin/fw-app-bkm-thai"
+ * @param slug                 Merchant slug (project name: fw-app-{slug})
+ * @param githubRepoFullName   Optional — ignored (kept for API compatibility)
  */
 export async function createVercelProject(
   slug: string,
-  githubRepoFullName: string
+  githubRepoFullName?: string
 ): Promise<{ projectId: string; projectUrl: string }> {
   const projectName = `fw-app-${slug}`;
+
+  // Suppress unused warning — param kept for call-site compatibility
+  void githubRepoFullName;
 
   // Check if project exists first
   try {
@@ -132,17 +180,11 @@ export async function createVercelProject(
     }
   }
 
-  console.log(`[vercel] Creating project ${projectName} from ${githubRepoFullName}`);
-
-  const [owner, repo] = githubRepoFullName.split('/');
+  console.log(`[vercel] Creating project ${projectName}`);
 
   const project = await vercelRequest<VercelProject>('POST', '/v10/projects', {
     name: projectName,
     framework: 'nextjs',
-    gitRepository: {
-      type: 'github',
-      repo: `${owner}/${repo}`,
-    },
   });
 
   console.log(`[vercel] Created project: ${project.id}`);
@@ -151,6 +193,91 @@ export async function createVercelProject(
     projectId: project.id,
     projectUrl: `https://${projectName}.vercel.app`,
   };
+}
+
+/**
+ * Reads all static build output files from the build container.
+ * Files are located at /workspace/builds/{merchantId}/out/ (Next.js static export).
+ *
+ * @param merchantId  Merchant identifier (matches build directory name)
+ * @returns Array of {file: relative_path, data: base64_content}
+ */
+export async function readBuildOutputFiles(merchantId: string): Promise<VercelFile[]> {
+  const outDir = `/workspace/builds/${merchantId}/out`;
+
+  console.log(`[vercel] Reading build output files from ${outDir}`);
+
+  // List all files in out/
+  const listResult = await execInBuildContainer(`find ${outDir} -type f`);
+  if (listResult.exitCode !== 0) {
+    throw new Error(`Failed to list build output files: ${listResult.stderr}`);
+  }
+
+  const absolutePaths = listResult.stdout
+    .trim()
+    .split('\n')
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  if (absolutePaths.length === 0) {
+    throw new Error(`No files found in build output directory: ${outDir}`);
+  }
+
+  console.log(`[vercel] Found ${absolutePaths.length} files to upload`);
+
+  // Read each file as base64 (sequentially to avoid overwhelming the exec server)
+  const files: VercelFile[] = [];
+
+  for (const absolutePath of absolutePaths) {
+    const readResult = await execInBuildContainer(`base64 < ${absolutePath}`);
+    if (readResult.exitCode !== 0) {
+      throw new Error(`Failed to read file ${absolutePath}: ${readResult.stderr}`);
+    }
+
+    // Compute relative path from the out/ directory
+    const relativePath = absolutePath.replace(`${outDir}/`, '');
+
+    files.push({
+      file: relativePath,
+      data: readResult.stdout.trim(),
+    });
+  }
+
+  console.log(`[vercel] Read ${files.length} files for deployment`);
+
+  return files;
+}
+
+/**
+ * Deploys files directly to a Vercel project using the file upload API.
+ *
+ * @param projectId   Vercel project ID
+ * @param projectName Vercel project name (used as deployment name)
+ * @param files       Array of {file: relative_path, data: base64_content}
+ * @returns deploymentUrl — the https URL of the live deployment
+ */
+export async function deployFilesToVercel(
+  projectId: string,
+  projectName: string,
+  files: VercelFile[]
+): Promise<{ deploymentUrl: string }> {
+  console.log(`[vercel] Deploying ${files.length} files to project ${projectId}`);
+
+  const deployment = await vercelRequest<VercelDeploymentCreateResponse>(
+    'POST',
+    '/v13/deployments',
+    {
+      name: projectName,
+      files,
+      projectId,
+      target: 'production',
+    }
+  );
+
+  const deploymentUrl = `https://${deployment.url}`;
+  console.log(`[vercel] Deployment created: ${deploymentUrl} (state: ${deployment.readyState})`);
+
+  return { deploymentUrl };
 }
 
 /**

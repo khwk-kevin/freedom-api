@@ -6,7 +6,12 @@
 
 import { createServiceClient } from '../supabase/server';
 import { createMerchantDnsRecord } from '../cloudflare';
-import { createVercelProject, assignVercelDomain, waitForDeployment } from '../vercel';
+import {
+  createVercelProject,
+  assignVercelDomain,
+  readBuildOutputFiles,
+  deployFilesToVercel,
+} from '../vercel';
 import {
   prepareBuildEnvironment,
   writeBuildFile,
@@ -190,15 +195,19 @@ export async function deployMerchantApp(
     const businessName = spec.businessName ?? merchantId;
     const slug = await resolveUniqueSlug(businessName);
     const domain = `${slug}.app.freedom.world`;
+    const projectName = `fw-app-${slug}`;
 
-    const { projectId: vercelProjectId } = await createVercelProject(slug, repoFullName);
+    const { projectId: vercelProjectId } = await createVercelProject(slug);
     await assignVercelDomain(vercelProjectId, domain);
 
     // ── Step 7: Cloudflare DNS ──────────────────────────────
     const { recordId: cloudflareRecordId } = await createMerchantDnsRecord(slug);
 
-    // ── Step 8: Wait for deployment ─────────────────────────
-    await waitForDeployment(vercelProjectId, 120_000);
+    // ── Step 8: Upload static files directly to Vercel ──────
+    progress('upload_start', 'Uploading app files to Vercel...');
+    const buildFiles = await readBuildOutputFiles(merchantId);
+    await deployFilesToVercel(vercelProjectId, projectName, buildFiles);
+    progress('upload_done', 'Files uploaded ✓');
 
     const productionUrl = `https://${domain}`;
     progress('deploy_done', 'Deployed ✓');
