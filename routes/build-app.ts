@@ -134,7 +134,6 @@ router.post('/', async (req: Request, res: Response) => {
       message: 'Setting up your app...',
     });
 
-    const githubOrg = process.env.GITHUB_ORG ?? 'khwk-kevin';
     const exists = await repoExists(merchantId);
     if (!exists) {
       await createMerchantRepo(merchantId, appSpec.identity.category || 'business');
@@ -148,6 +147,17 @@ router.post('/', async (req: Request, res: Response) => {
 
     // ── Steps 2-9: Deploy (vault → build → export → Vercel → Cloudflare) ──
     const merchantSpec: MerchantAppSpec = {
+      // Pass through all spec data for vault writer (lower priority)
+      ...(appSpec as unknown as Record<string, unknown>),
+      // Required MerchantAppSpec fields — must come after spread so they are not overridden
+      id: merchantId,
+      slug: '',  // resolved to a unique slug during deploy
+      region: 'SEA',
+      appType: 'business',
+      primaryLanguage: 'en',
+      tokenBalance: 0,
+      tokenUsed: 0,
+      // Core identity/build fields
       businessName,
       businessType: appSpec.identity.type || appSpec.identity.category || 'other',
       category: appSpec.identity.category || 'other',
@@ -155,8 +165,6 @@ router.post('/', async (req: Request, res: Response) => {
       status: 'building',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      // Pass through all spec data for vault writer
-      ...(appSpec as unknown as Record<string, unknown>),
     } as MerchantAppSpec;
 
     const result = await deployMerchantApp(

@@ -18,7 +18,7 @@ const execAsync = promisify(execCallback);
 // CONFIGURATION
 // ============================================================
 
-const RAILWAY_API_URL = 'https://backboard.railway.com/graphql/v2';
+const RAILWAY_API_URL = 'https://backboard.railway.app/graphql/v2';
 const RAILWAY_API_TOKEN = process.env.RAILWAY_TEAM_TOKEN ?? process.env.RAILWAY_API_TOKEN ?? '';
 const RAILWAY_TEMPLATE_REPO = (process.env.RAILWAY_TEMPLATE_REPO ?? 'khwk-kevin/freedom-app-template').trim();
 const RAILWAY_REGION = process.env.RAILWAY_REGION ?? 'ap-southeast-1';
@@ -952,7 +952,7 @@ async function sshExecViaApi(
   // This is a best-effort fallback using Railway's deployment exec
   try {
     const response = await fetch(
-      `https://backboard.railway.com/project/${projectId}/environment/production/service/${serviceId}/exec`,
+      `https://backboard.railway.app/project/${projectId}/environment/production/service/${serviceId}/exec`,
       {
         method: 'POST',
         headers: {
