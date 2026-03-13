@@ -191,7 +191,7 @@ async function tryPlacesApi(query: string): Promise<GooglePlaceData | null> {
 
     if (!res.ok) return null;
 
-    const data = await res.json();
+    const data: any = await res.json();
     const place = data.places?.[0];
     if (!place) return null;
 
@@ -204,7 +204,7 @@ async function tryPlacesApi(query: string): Promise<GooglePlaceData | null> {
             const mediaUrl = `https://places.googleapis.com/v1/${photo.name}/media?maxWidthPx=800&key=${apiKey}`;
             const photoRes = await fetch(mediaUrl, { method: 'GET', redirect: 'manual' });
             if (photoRes.status === 200) {
-              const photoData = await photoRes.json().catch(() => null);
+              const photoData: any = await photoRes.json().catch(() => null);
               if (photoData?.photoUri) return photoData.photoUri;
             }
             const location = photoRes.headers.get('location');
