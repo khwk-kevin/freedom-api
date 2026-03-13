@@ -297,13 +297,13 @@ export async function deployFilesToVercel(
   console.log(`[vercel] Uploaded ${fileRefs.length} files, creating deployment...`);
 
   // Step 2: Create deployment referencing uploaded files
+  // Note: projectId must be a query param, not in the body
   const deployment = await vercelRequest<VercelDeploymentCreateResponse>(
     'POST',
-    '/v13/deployments',
+    `/v13/deployments?projectId=${projectId}`,
     {
       name: projectName,
       files: fileRefs,
-      projectId,
       target: 'production',
       projectSettings: {
         framework: null, // Static site, no framework
