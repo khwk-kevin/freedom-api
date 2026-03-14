@@ -20,8 +20,7 @@ import { APP_BUILDER_SYSTEM_PROMPT } from '../lib/app-builder/ava-prompt';
 const router = Router();
 
 const client = new Anthropic({
-  authToken: process.env.ANTHROPIC_AUTH_TOKEN || null,
-  apiKey: process.env.ANTHROPIC_API_KEY || null,
+  authToken: process.env.ANTHROPIC_AUTH_TOKEN,
 });
 
 interface ChatMessage {

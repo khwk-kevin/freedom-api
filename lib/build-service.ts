@@ -7,9 +7,9 @@
  * then the result is pushed to GitHub → Vercel auto-deploys.
  *
  * Env vars: BUILD_SERVICE_PROJECT_ID, BUILD_SERVICE_ID
- * Auth: Uses Anthropic OAuth tokens with automatic fallback rotation.
+ * Auth: Uses Anthropic OAuth tokens with automatic rotation.
  *   ANTHROPIC_TOKEN_1..4 env vars (sk-ant-oat01-...) tried in order.
- *   Falls back to ANTHROPIC_API_KEY if no numbered tokens are set.
+ *   No API key fallback — OAuth only.
  */
 
 import { sshExecCommand, sshWriteFile } from './app-builder/railway';
@@ -26,13 +26,12 @@ const BUILD_SERVICE_ID = process.env.BUILD_SERVICE_ID ?? '';
 // ============================================================
 
 /**
- * Load all available Anthropic tokens in priority order.
+ * Load all available Anthropic OAuth tokens in priority order.
  * Env vars: ANTHROPIC_TOKEN_1, ANTHROPIC_TOKEN_2, ANTHROPIC_TOKEN_3, ANTHROPIC_TOKEN_4
- * Fallback: ANTHROPIC_API_KEY
+ * OAuth only — no API keys.
  */
 function getAnthropicTokens(): string[] {
   const tokens: string[] = [];
-  // OAuth tokens only — API keys are not used for Claude Code builds
   for (let i = 1; i <= 4; i++) {
     const t = process.env[`ANTHROPIC_TOKEN_${i}`];
     if (t) tokens.push(t);
@@ -50,7 +49,7 @@ let nextTokenIndex = 0;
 function getNextToken(): { token: string; index: number } {
   const tokens = getAnthropicTokens();
   if (tokens.length === 0) {
-    throw new Error('No Anthropic tokens configured. Set ANTHROPIC_TOKEN_1..4 or ANTHROPIC_API_KEY.');
+    throw new Error('No Anthropic OAuth tokens configured. Set ANTHROPIC_TOKEN_1..4.');
   }
   const index = nextTokenIndex % tokens.length;
   return { token: tokens[index], index };
@@ -189,8 +188,8 @@ export async function runClaudeCodeBuild(
     const promptPath = `${buildDir}/.build-prompt.txt`;
     const scriptPath = `${buildDir}/.run-claude.sh`;
     await sshWriteFile(projectId, serviceId, promptPath, prompt);
-    // OAuth tokens use ANTHROPIC_AUTH_TOKEN, not ANTHROPIC_API_KEY
-    const envVar = token.startsWith('sk-ant-oat') ? 'ANTHROPIC_AUTH_TOKEN' : 'ANTHROPIC_API_KEY';
+    // OAuth tokens always use ANTHROPIC_AUTH_TOKEN
+    const envVar = 'ANTHROPIC_AUTH_TOKEN';
     const scriptContent = [
       '#!/bin/bash',
       `export ${envVar}="${token}"`,
