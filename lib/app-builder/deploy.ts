@@ -221,7 +221,12 @@ export async function deployMerchantApp(
     spec.vercelProjectId = vercelProjectId;
     spec.cloudflareRecordId = cloudflareRecordId;
 
-    await saveMerchantApp(merchantId, spec);
+    // Save to Supabase — non-fatal (app is already deployed)
+    try {
+      await saveMerchantApp(merchantId, spec);
+    } catch (saveErr) {
+      console.error(`[deploy] Supabase save failed (non-fatal):`, saveErr);
+    }
 
     // ── Step 10: Cleanup ────────────────────────────────────
     void cleanupBuildEnvironment(merchantId);

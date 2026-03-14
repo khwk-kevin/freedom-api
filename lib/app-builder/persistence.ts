@@ -49,7 +49,12 @@ export async function saveMerchantApp(
     );
 
   if (error) {
-    throw new Error(`saveMerchantApp failed for ${merchantId}: ${error.message}`);
+    // Non-fatal: log but don't crash the pipeline (deploy already succeeded)
+    console.error(`[persistence] saveMerchantApp failed for ${merchantId}: ${error.message}`);
+    // Only throw if it's not a UUID format issue (which means the app is still deployed, just not saved)
+    if (!error.message.includes('uuid')) {
+      throw new Error(`saveMerchantApp failed for ${merchantId}: ${error.message}`);
+    }
   }
 }
 
