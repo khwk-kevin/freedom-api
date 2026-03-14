@@ -144,6 +144,16 @@ export function darkenColor(hex: string, factor: number): string {
   return toHex(r * (1 - f), g * (1 - f), b * (1 - f));
 }
 
+/**
+ * Determine if a hex color is "dark" (luminance < 0.5).
+ */
+export function isColorDark(hex: string): boolean {
+  const [r, g, b] = parseHex(hex);
+  // Relative luminance (sRGB)
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return luminance < 0.5;
+}
+
 // ============================================================
 // UTILITY: FONT DETECTION
 // ============================================================
@@ -579,6 +589,16 @@ export function generateThemeJson(spec: Partial<MerchantAppSpec>): string {
   const mood = spec.mood ?? 'warm';
   const variants = MOOD_VARIANTS[mood] ?? DEFAULT_MOOD_VARIANTS;
 
+  // Determine background from scraped data or mood
+  const scrapedBg = spec.scrapedData?.backgroundColor;
+  const isDarkMood = ['luxury', 'dark', 'bold', 'edgy', 'moody', 'gaming'].includes(mood);
+  const bgColor = scrapedBg || (isDarkMood ? '#0F0F1A' : '#ffffff');
+  const isDark = isColorDark(bgColor);
+  const fgColor = isDark ? '#f5f5f5' : '#1a1a1a';
+  const mutedBg = isDark ? '#1a1a2e' : '#f5f5f5';
+  const mutedFg = isDark ? '#a1a1aa' : '#6b7280';
+  const borderColor = isDark ? darkenColor(primaryColor, 0.3) : lightenColor(primaryColor, 0.9);
+
   const theme = {
     version: '1.0',
     mood,
@@ -588,13 +608,13 @@ export function generateThemeJson(spec: Partial<MerchantAppSpec>): string {
       primaryLight: lightenColor(primaryColor, 0.85),
       primaryDark: darkenColor(primaryColor, 0.2),
       secondary: spec.secondaryColor || lightenColor(primaryColor, 0.9),
-      background: '#ffffff',
-      foreground: '#1a1a1a',
-      muted: '#f5f5f5',
-      mutedForeground: '#6b7280',
+      background: bgColor,
+      foreground: fgColor,
+      muted: mutedBg,
+      mutedForeground: mutedFg,
       accent: lightenColor(primaryColor, 0.7),
-      accentForeground: '#1a1a1a',
-      border: lightenColor(primaryColor, 0.9),
+      accentForeground: fgColor,
+      border: borderColor,
     },
     fonts: {
       heading: fonts.heading,
@@ -825,10 +845,10 @@ Every page, every component, every interaction should reflect this specific app'
 - **UI style:** ${uiStyle}
 - **Heading font:** ${fonts.heading}
 - **Body font:** ${fonts.body}
-- **Background:** #050314 (dark theme, Freedom World brand)
+- **Background:** ${spec.scrapedData?.backgroundColor || (['luxury', 'dark', 'bold', 'edgy', 'moody', 'gaming'].includes(mood) ? '#0F0F1A' : '#ffffff')} (${spec.scrapedData?.backgroundColor ? 'from brand website' : (['luxury', 'dark', 'bold', 'edgy', 'moody', 'gaming'].includes(mood) ? 'dark mood' : 'light theme')})
 - **Language:** ${spec.primaryLanguage || 'en'}
 
-Read design/theme.json for full color tokens. NEVER hardcode colors — use the theme.
+Read design/theme.json for full color tokens. NEVER hardcode colors — use the theme. The background and foreground colors MUST match the theme.json values.
 ${productsSection}
 ${prioritiesSection}
 ${antiSection}
@@ -840,9 +860,9 @@ ${locationSection}
 1. **Mobile-first.** Everything must work perfectly at 375px width.
 2. **Real content only.** Use data from context/business.md. No "Lorem ipsum", no "Your Business Here".
 3. **Real photos** from /public/assets/ if available. No placeholder images.
-4. **All styling via Tailwind** using theme tokens. No inline hex colors.
+4. **All styling via Tailwind** using theme tokens from design/theme.json. No inline hex colors.
 5. **TypeScript + Next.js App Router.** Every component needs "use client" if it has state/effects.
-6. **Dark theme** (#050314 background) matching Freedom World brand.
+6. **Use the EXACT background color from design/theme.json** — do NOT default to dark. If theme says light background, use light. If dark, use dark.
 7. **The app should feel UNIQUE** — not like a cookie-cutter template. The layout, sections, and interactions should make sense for a ${type} app specifically.
 
 ## Pages to Build

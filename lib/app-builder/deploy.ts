@@ -175,7 +175,7 @@ export async function deployMerchantApp(
       `This is "${businessName}" — ${description}. ` +
       `Build a UNIQUE ${businessType} app that looks and feels custom-built for this purpose. ` +
       `NOT a generic template — the layout, hero, sections, and interactions should all be specific to a ${businessType}.${productHint}${audienceHint} ` +
-      `Design: ${mood} mood, ${uiStyle} style, primary color ${primaryColor}, dark background #050314. ` +
+      `Design: ${mood} mood, ${uiStyle} style, primary color ${primaryColor}. Use the background color from design/theme.json — do NOT assume dark theme. ` +
       `Use real data from context/business.md. No placeholder text. Mobile-first. ` +
       `After building, run the TypeScript compiler to verify no errors.`;
 
