@@ -156,15 +156,28 @@ export async function deployMerchantApp(
     // ── Step 3: Claude Code build ───────────────────────────
     progress('build_start', 'Building your app with AI...');
 
-    const businessType = spec.businessType || spec.category || 'restaurant-food';
+    const businessType = spec.businessType || spec.category || 'app';
+    const businessName = spec.businessName || 'the app';
+    const description = spec.ideaDescription || spec.scrapedData?.description || `a ${businessType} app`;
     const uiStyle = spec.uiStyle || 'outlined';
+    const primaryColor = spec.primaryColor || '#10F48B';
+    const mood = spec.mood || 'modern';
+
+    // Products summary for the prompt
+    const productNames = spec.products?.slice(0, 5).map(p => p.name).join(', ') || '';
+    const productHint = productNames ? ` Products/items: ${productNames}.` : '';
+
+    // Audience hint
+    const audienceHint = spec.audienceDescription ? ` Target audience: ${spec.audienceDescription}.` : '';
 
     const buildPrompt =
-      `Read CLAUDE.md. You have context files in context/ and design config in design/theme.json. ` +
-      `Build a complete ${businessType} app following the ${businessType} build skill in skills/build/. ` +
-      `Use the ${uiStyle} design style for all components. ` +
-      `Build ALL pages listed in the skill. Use real data from context/business.md. ` +
-      `After building, verify there are no TypeScript errors.`;
+      `Read CLAUDE.md first — it contains the EXACT requirements for this specific app. ` +
+      `This is "${businessName}" — ${description}. ` +
+      `Build a UNIQUE ${businessType} app that looks and feels custom-built for this purpose. ` +
+      `NOT a generic template — the layout, hero, sections, and interactions should all be specific to a ${businessType}.${productHint}${audienceHint} ` +
+      `Design: ${mood} mood, ${uiStyle} style, primary color ${primaryColor}, dark background #050314. ` +
+      `Use real data from context/business.md. No placeholder text. Mobile-first. ` +
+      `After building, run the TypeScript compiler to verify no errors.`;
 
     const claudeResult = await runClaudeCodeBuild(merchantId, buildPrompt);
 

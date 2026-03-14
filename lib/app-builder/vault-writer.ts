@@ -740,8 +740,134 @@ _${L.notSet}_
  *
  * Handles incomplete specs gracefully — never throws.
  */
+/**
+ * CLAUDE.md — THE UNIQUE BUILD INSTRUCTION FOR THIS SPECIFIC APP.
+ * 
+ * This is NOT a generic template. Every field comes from the user's interview.
+ * Claude Code reads this first and builds exactly what the user asked for.
+ */
+export function generateClaudeMd(spec: Partial<MerchantAppSpec>): string {
+  const name = spec.businessName || 'Your App';
+  const type = spec.businessType || spec.category || 'app';
+  const fonts = detectFontForLanguage(spec.primaryLanguage || 'en');
+  const primaryColor = spec.primaryColor || '#10F48B';
+  const mood = spec.mood || 'modern';
+  const uiStyle = spec.uiStyle || 'outlined';
+
+  // Build the description from all available data
+  const descParts: string[] = [];
+  if (spec.ideaDescription) descParts.push(spec.ideaDescription);
+  if (spec.scrapedData?.description) descParts.push(spec.scrapedData.description);
+  const description = descParts.join('\n') || `A ${type} app called ${name}.`;
+
+  // Products / items / content
+  let productsSection = '';
+  if (spec.products?.length) {
+    productsSection = `\n## Products / Items / Content\nBuild pages and UI for these REAL items:\n${spec.products.map(p => {
+      const parts = [`- **${p.name}**`];
+      if (p.description) parts.push(`: ${p.description}`);
+      if (p.price != null) parts.push(` (${p.currency || ''}${p.price})`);
+      if (p.category) parts.push(` [${p.category}]`);
+      return parts.join('');
+    }).join('\n')}\n\nDo NOT use placeholder products. Use these exact items with real names and prices.`;
+  }
+
+  // Priorities — what matters most
+  let prioritiesSection = '';
+  if (spec.appPriorities?.length) {
+    prioritiesSection = `\n## Feature Priority (in order of importance)\n${spec.appPriorities.map((p, i) => `${i + 1}. ${p}`).join('\n')}\n\nBuild the #1 priority feature FIRST and make it the hero of the app.`;
+  }
+
+  // Anti-preferences — what to avoid
+  let antiSection = '';
+  if (spec.antiPreferences?.length) {
+    antiSection = `\n## DO NOT\n${spec.antiPreferences.map(a => `- ❌ ${a}`).join('\n')}`;
+  }
+
+  // Audience
+  let audienceSection = '';
+  if (spec.audienceDescription) {
+    audienceSection = `\n## Target Audience\n${spec.audienceDescription}\n\nDesign every interaction for THIS audience. Use language, imagery, and UX patterns that resonate with them.`;
+  }
+
+  // Selected features
+  let featuresSection = '';
+  if (spec.selectedFeatures?.length) {
+    featuresSection = `\n## Required Features\nThe user specifically requested these features — build ALL of them:\n${spec.selectedFeatures.map(f => `- ✅ ${f}`).join('\n')}`;
+  }
+
+  // Location / scraped data
+  let locationSection = '';
+  if (spec.scrapedData?.address) {
+    locationSection = `\n## Location\n- Address: ${spec.scrapedData.address}`;
+    if (spec.scrapedData.phone) locationSection += `\n- Phone: ${spec.scrapedData.phone}`;
+    if (spec.scrapedData.hours) {
+      const hoursStr = Object.entries(spec.scrapedData.hours).map(([d, h]) => `${d}: ${h}`).join(', ');
+      locationSection += `\n- Hours: ${hoursStr}`;
+    }
+    if (spec.scrapedData.rating) locationSection += `\n- Rating: ${spec.scrapedData.rating}/5`;
+  }
+
+  return `# ${name}
+
+> ${description}
+
+## What This App Is
+This is a **${type}** app called **${name}**.
+The user described it as: "${description}"
+
+This is NOT a generic template. Build EXACTLY what the user asked for.
+Every page, every component, every interaction should reflect this specific app's purpose.
+
+## Design System
+- **Primary color:** ${primaryColor}
+- **Mood/vibe:** ${mood}
+- **UI style:** ${uiStyle}
+- **Heading font:** ${fonts.heading}
+- **Body font:** ${fonts.body}
+- **Background:** #050314 (dark theme, Freedom World brand)
+- **Language:** ${spec.primaryLanguage || 'en'}
+
+Read design/theme.json for full color tokens. NEVER hardcode colors — use the theme.
+${productsSection}
+${prioritiesSection}
+${antiSection}
+${audienceSection}
+${featuresSection}
+${locationSection}
+
+## Build Rules
+1. **Mobile-first.** Everything must work perfectly at 375px width.
+2. **Real content only.** Use data from context/business.md. No "Lorem ipsum", no "Your Business Here".
+3. **Real photos** from /public/assets/ if available. No placeholder images.
+4. **All styling via Tailwind** using theme tokens. No inline hex colors.
+5. **TypeScript + Next.js App Router.** Every component needs "use client" if it has state/effects.
+6. **Dark theme** (#050314 background) matching Freedom World brand.
+7. **The app should feel UNIQUE** — not like a cookie-cutter template. The layout, sections, and interactions should make sense for a ${type} app specifically.
+
+## Pages to Build
+Build these pages based on what makes sense for a **${type}** app:
+- **Homepage** — Hero section that captures the essence of ${name}. Not a generic hero.
+- **Main feature page** — ${spec.appPriorities?.[0] || `The core feature of a ${type}`}
+${spec.products?.length ? `- **Products/Items page** — Grid or list of ${spec.products.length} items with details` : ''}
+${spec.audienceDescription ? `- **About page** — Story that resonates with the target audience` : ''}
+- **Contact page** — ${spec.scrapedData?.address ? 'With real address and map' : 'Simple contact form'}
+
+## Quality Check
+Before finishing:
+- [ ] Every page uses the correct primary color (${primaryColor})
+- [ ] No placeholder text anywhere
+- [ ] Mobile layout works at 375px
+- [ ] All TypeScript compiles without errors
+- [ ] The app looks and feels like a **${type}** app, not a generic template
+`;
+}
+
 export function generateVaultFiles(spec: Partial<MerchantAppSpec>): VaultFile[] {
   const files: VaultFile[] = [];
+
+  // CLAUDE.md — the unique build instruction for THIS app
+  files.push({ path: 'CLAUDE.md', content: generateClaudeMd(spec) });
 
   // Always generate context files (overwrite on every spec update)
   files.push({ path: 'context/brand.md', content: generateBrandMd(spec) });
