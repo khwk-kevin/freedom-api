@@ -32,13 +32,10 @@ const BUILD_SERVICE_ID = process.env.BUILD_SERVICE_ID ?? '';
  */
 function getAnthropicTokens(): string[] {
   const tokens: string[] = [];
+  // OAuth tokens only — API keys are not used for Claude Code builds
   for (let i = 1; i <= 4; i++) {
     const t = process.env[`ANTHROPIC_TOKEN_${i}`];
     if (t) tokens.push(t);
-  }
-  // Fallback to single API key
-  if (tokens.length === 0 && process.env.ANTHROPIC_API_KEY) {
-    tokens.push(process.env.ANTHROPIC_API_KEY);
   }
   return tokens;
 }
