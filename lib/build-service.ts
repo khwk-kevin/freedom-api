@@ -184,16 +184,25 @@ export async function runClaudeCodeBuild(
   const tokens = getAnthropicTokens();
   const maxAttempts = Math.min(tokens.length, 4); // Try up to 4 different tokens
 
-  const escapedPrompt = prompt.replace(/"/g, '\\"');
-
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const { token, index } = getNextToken();
     console.log(`[build-service] Claude Code build attempt ${attempt + 1}/${maxAttempts} (token #${index + 1})`);
 
-    // Inject the OAuth token as env var prefix so Claude Code uses it
+    // Write prompt + runner script to build dir — avoids all shell quoting/piping issues
+    const promptPath = `${buildDir}/.build-prompt.txt`;
+    const scriptPath = `${buildDir}/.run-claude.sh`;
+    await sshWriteFile(projectId, serviceId, promptPath, prompt);
+    const scriptContent = [
+      '#!/bin/bash',
+      `export ANTHROPIC_API_KEY="${token}"`,
+      `cd "${buildDir}"`,
+      `claude --dangerously-skip-permissions --max-turns 100 -p "$(cat "${promptPath}")" 2>&1`,
+      'exit $?',
+    ].join('\n');
+    await sshWriteFile(projectId, serviceId, scriptPath, scriptContent);
+
     // Run as 'builder' user — Claude Code refuses --dangerously-skip-permissions as root
-    // sudo -E preserves ANTHROPIC_API_KEY from the parent env
-    const cmd = `ANTHROPIC_API_KEY=${token} sudo -E -u builder claude -p "${escapedPrompt}" --dangerously-skip-permissions --max-turns 100 --cwd ${buildDir} </dev/null`;
+    const cmd = `chown builder:builder "${scriptPath}" "${promptPath}" && chmod +x "${scriptPath}" && sudo -u builder "${scriptPath}"`;
 
     const result = await sshExecCommand(projectId, serviceId, cmd);
 

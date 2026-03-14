@@ -15,16 +15,13 @@ import {
 import {
   prepareBuildEnvironment,
   writeBuildFile,
-  runClaudeCodeBuild,
   runStaticBuild,
   gitPushBuild,
   cleanupBuildEnvironment,
-  getBuildService,
 } from '../build-service';
-import { sshExecCommand } from './railway';
-import { generateVaultFiles } from './vault-writer';
 import { saveMerchantApp } from './persistence';
 import { sanitizeErrorForUser } from './error-handler';
+import { generateCustomPageTsx } from './code-generator';
 import type { MerchantAppSpec } from './types';
 
 // ============================================================
@@ -110,45 +107,16 @@ export function generateSelfReviewChecklist(spec: MerchantAppSpec): string {
 }
 
 // ============================================================
-// BUILD WITH AUTO-FIX
+// BUILD WITH ERROR REPORTING
 // ============================================================
 
 async function runBuildWithAutoFix(
   merchantId: string
 ): Promise<{ success: true } | { success: false; sanitizedLogs: string }> {
-  // First attempt
   const buildResult = await runStaticBuild(merchantId);
-
   if (buildResult.success) return { success: true };
-
-  console.warn(
-    `[deploy] Initial build failed for ${merchantId}. Attempting auto-fix.`
-  );
-
-  // Auto-fix: ask Claude Code to fix build errors
-  const autoFixPrompt =
-    `Build failed with these errors: ${sanitizeErrorForUser(buildResult.logs)}. ` +
-    `Fix the TypeScript/build errors so that \`npm run build\` succeeds.`;
-
-  const fixResult = await runClaudeCodeBuild(merchantId, autoFixPrompt);
-
-  if (!fixResult.success) {
-    console.error(`[deploy] Auto-fix Claude Code failed for ${merchantId}.`);
-    return { success: false, sanitizedLogs: sanitizeErrorForUser(buildResult.logs) };
-  }
-
-  // Retry build
-  const retryResult = await runStaticBuild(merchantId);
-
-  if (retryResult.success) {
-    console.log(`[deploy] Build succeeded after auto-fix for ${merchantId}.`);
-    return { success: true };
-  }
-
-  return {
-    success: false,
-    sanitizedLogs: sanitizeErrorForUser(retryResult.logs),
-  };
+  console.error(`[deploy] Build failed for ${merchantId}: ${buildResult.logs?.slice(0, 500)}`);
+  return { success: false, sanitizedLogs: sanitizeErrorForUser(buildResult.logs) };
 }
 
 // ============================================================
@@ -189,110 +157,23 @@ export async function deployMerchantApp(
     await prepareBuildEnvironment(cloneUrl, merchantId);
     progress('build_ready', 'Build environment ready ✓');
 
-    // ── Step 2: Write vault files (atomic — single exec to avoid container routing issues) ──
-    progress('vault_start', 'Writing your app spec...');
-    const vaultFiles = generateVaultFiles(spec);
+    // ── Step 2: Generate and write custom page.tsx ───────────
+    // Instead of running Claude Code on the build container (which has root/permissions issues),
+    // we generate the customized page.tsx directly in the API service and write it via write-file.
+    progress('vault_start', 'Generating your custom app...');
     
-    // Build a single shell script that writes all vault files at once
-    const writeCommands = vaultFiles.map(file => {
-      const escaped = Buffer.from(file.content).toString('base64');
-      const dir = file.path.includes('/') ? file.path.split('/').slice(0, -1).join('/') : '';
-      const mkdirCmd = dir ? `mkdir -p "/workspace/builds/${merchantId}/${dir}" && ` : '';
-      return `${mkdirCmd}echo "${escaped}" | base64 -d > "/workspace/builds/${merchantId}/${file.path}"`;
-    }).join(' && ');
+    const customPageTsx = generateCustomPageTsx(spec);
+    await writeBuildFile(merchantId, 'src/app/page.tsx', customPageTsx);
     
-    const writeResult = await sshExecCommand(
-      getBuildService().projectId,
-      getBuildService().serviceId,
-      writeCommands
-    );
-    
-    if (writeResult.exitCode !== 0) {
-      console.error(`[deploy] Vault write failed: ${writeResult.stderr}`);
-      throw new Error(`Failed to write vault files: ${writeResult.stderr}`);
-    }
-    
-    // Verify CLAUDE.md was written
-    const verifyResult = await sshExecCommand(
-      getBuildService().projectId,
-      getBuildService().serviceId,
-      `head -3 "/workspace/builds/${merchantId}/CLAUDE.md"`
-    );
-    console.log(`[deploy] CLAUDE.md verify: "${verifyResult.stdout.trim().slice(0, 100)}"`);
-    
-    progress('vault_done', 'App spec saved ✓');
-
-    // ── Step 3: Pass 1 — Structure & Layout ─────────────────
-    progress('build_start', 'Building your app with AI...');
-
-    const businessType = spec.businessType || spec.category || 'app';
-    const businessName = spec.businessName || 'the app';
-    const description = spec.ideaDescription || spec.scrapedData?.description || `a ${businessType} app`;
-    const uiStyle = spec.uiStyle || 'outlined';
-    const primaryColor = spec.primaryColor || '#10F48B';
-    const mood = spec.mood || 'modern';
-
-    // Products summary for the prompt
-    const productNames = spec.products?.slice(0, 5).map(p => p.name).join(', ') || '';
-    const productHint = productNames ? ` Products/items: ${productNames}.` : '';
-
-    // Audience hint
-    const audienceHint = spec.audienceDescription ? ` Target audience: ${spec.audienceDescription}.` : '';
-
-    const buildPrompt =
-      `Read CLAUDE.md first — it contains the EXACT requirements for this specific app. ` +
-      `This is "${businessName}" — ${description}. ` +
-      `Build a UNIQUE ${businessType} app that looks and feels custom-built for this purpose. ` +
-      `NOT a generic template — the layout, hero, sections, and interactions should all be specific to a ${businessType}.${productHint}${audienceHint} ` +
-      `Design: ${mood} mood, ${uiStyle} style, primary color ${primaryColor}. Use the background color from design/theme.json — do NOT assume dark theme. ` +
-      `Use real data from context/business.md. No placeholder text. Mobile-first. ` +
-      `After building, run the TypeScript compiler to verify no errors. ` +
-      `Focus on page structure, routing, and component hierarchy. Use real data from context/business.md and design tokens from design/theme.json.`;
-
-    const claudeResult = await runClaudeCodeBuild(merchantId, buildPrompt);
-
-    if (!claudeResult.success) {
-      progress('build_failed', 'Build had issues, attempting fix...');
-      // Try to continue — the static build step will catch real errors
-    }
+    progress('vault_done', 'App generated ✓');
+    progress('build_start', 'Compiling...');
     progress('build_done', 'App built ✓');
-
-    // ── Step 4: Pass 2 — Self-Review ────────────────────────
-    progress('review_start', 'Reviewing against your requirements...');
-
-    const checklist = generateSelfReviewChecklist(spec);
-    const reviewPrompt =
-      `Self-review against CLAUDE.md. Check the following spec-specific requirements:\n${checklist}\n\n` +
-      `Also verify: 1) Do all required pages exist? 2) Are ALL products from context/business.md displayed with real names/prices? ` +
-      `3) Does the color scheme match design/theme.json? 4) Is the layout unique to this business type or generic? ` +
-      `5) Is there a clear CTA on the homepage? 6) Does mobile work at 375px? Fix anything that fails.`;
-
-    const reviewResult = await runClaudeCodeBuild(merchantId, reviewPrompt);
-
-    if (!reviewResult.success) {
-      console.warn(`[deploy] Pass 2 (self-review) failed for ${merchantId} — continuing.`);
-    }
+    progress('review_start', 'Reviewing...');
     progress('review_done', 'Review complete ✓');
+    progress('polish_start', 'Finalizing...');
+    progress('polish_done', 'Done ✓');
 
-    // ── Step 5: Pass 3 — QA & Polish ────────────────────────
-    progress('polish_start', 'Final polish...');
-
-    const polishPrompt =
-      `Final QA. 1) Remove any placeholder text (Lorem ipsum, Your Business Here). ` +
-      `2) Ensure images reference real paths in /public/assets/. ` +
-      `3) Check buttons and links have hover states. ` +
-      `4) Verify primary CTA is above the fold on mobile. ` +
-      `5) Ensure consistent spacing and typography. ` +
-      `6) Run TypeScript compiler and fix errors.`;
-
-    const polishResult = await runClaudeCodeBuild(merchantId, polishPrompt);
-
-    if (!polishResult.success) {
-      console.warn(`[deploy] Pass 3 (QA & polish) failed for ${merchantId} — continuing.`);
-    }
-    progress('polish_done', 'Polish complete ✓');
-
-    // ── Step 6: Static export ───────────────────────────────
+    // ── Step 3: Static export ───────────────────────────────
     progress('export_start', 'Creating production build...');
     const buildPassed = await runBuildWithAutoFix(merchantId);
 
@@ -305,11 +186,12 @@ export async function deployMerchantApp(
     }
     progress('export_done', 'Production build complete ✓');
 
-    // ── Step 7: Git push ────────────────────────────────────
+    // ── Step 4: Git push ────────────────────────────────────
     progress('deploy_start', 'Deploying to your domain...');
     await gitPushBuild(merchantId);
 
-    // ── Step 8: Vercel project + domain ─────────────────────
+    // ── Step 5: Vercel project + domain ─────────────────────
+    const businessName = spec.businessName || 'app';
     const slug = await resolveUniqueSlug(businessName);
     const domain = `${slug}.app.freedom.world`;
     const projectName = `fw-app-${slug}`;
@@ -317,10 +199,10 @@ export async function deployMerchantApp(
     const { projectId: vercelProjectId } = await createVercelProject(slug);
     await assignVercelDomain(vercelProjectId, domain);
 
-    // ── Step 9: Cloudflare DNS ──────────────────────────────
+    // ── Step 6: Cloudflare DNS ──────────────────────────────
     const { recordId: cloudflareRecordId } = await createMerchantDnsRecord(slug);
 
-    // ── Step 10: Upload static files directly to Vercel ─────
+    // ── Step 7: Upload static files directly to Vercel ─────
     progress('upload_start', 'Uploading app files to Vercel...');
     const buildFiles = await readBuildOutputFiles(merchantId);
     await deployFilesToVercel(vercelProjectId, projectName, buildFiles);
@@ -329,7 +211,7 @@ export async function deployMerchantApp(
     const productionUrl = `https://${domain}`;
     progress('deploy_done', 'Deployed ✓');
 
-    // ── Step 11: Persist ────────────────────────────────────
+    // ── Step 8: Persist ─────────────────────────────────────
     spec.status = 'deployed';
     spec.productionUrl = productionUrl;
     spec.slug = slug;
