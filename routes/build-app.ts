@@ -1,8 +1,11 @@
 /**
  * POST /apps/build-app
  *
- * Real build pipeline: provision → vault → Claude Code → static export → Vercel deploy.
+ * Full deploy pipeline: provision → generate → build → Vercel deploy.
  * Returns SSE progress events throughout the process.
+ *
+ * This endpoint should only be called AFTER the user has signed up.
+ * For pre-signup previews, use POST /apps/preview instead.
  *
  * Body:     { merchantId: string, spec?: AppSpec, onboardingData?: Record<string, unknown> }
  * Response: text/event-stream SSE
@@ -33,6 +36,93 @@ function sendSSE(res: Response, data: Record<string, unknown>) {
   }
 }
 
+/**
+ * Parse onboarding data into AppSpec.
+ * Handles products sent as either strings ("Name:Price") or objects ({name, price}).
+ */
+function buildAppSpecFromOnboarding(data: Record<string, unknown>, merchantId: string): AppSpec {
+  // Parse products — handle both string format ("Pad Thai:฿120") and object format
+  let products: { name: string; price?: string; description?: string; category?: string }[] = [];
+  if (Array.isArray(data.products)) {
+    products = (data.products as unknown[]).map(p => {
+      if (typeof p === 'string') {
+        const [name, price] = p.split(':');
+        return { name: name?.trim() || '', price: price?.trim() || '' };
+      }
+      if (typeof p === 'object' && p !== null) {
+        const obj = p as Record<string, unknown>;
+        return {
+          name: String(obj.name || ''),
+          price: obj.price != null ? String(obj.price) : '',
+          description: obj.description ? String(obj.description) : '',
+          category: obj.category ? String(obj.category) : '',
+        };
+      }
+      return { name: String(p), price: '' };
+    }).filter(p => p.name);
+  }
+
+  // Parse coreActions from onboardingData
+  const coreActions = Array.isArray(data.coreActions) ? data.coreActions.map(String) : [];
+
+  return {
+    identity: {
+      name: String(data.name || 'Your App'),
+      tagline: String(data.description || '').slice(0, 80),
+      description: String(data.description || ''),
+      type: String(data.businessType || 'other') as AppSpec['identity']['type'],
+      category: String(data.businessType || ''),
+    },
+    brand: {
+      primaryColor: String(data.primaryColor || '#10F48B'),
+      vibe: (String(data.vibe || 'modern')) as AppSpec['brand']['vibe'],
+      logoUrl: data.logo ? String(data.logo) : undefined,
+      bannerUrl: data.banner ? String(data.banner) : undefined,
+      fontStyle: 'clean',
+      backgroundColor: data.backgroundColor ? String(data.backgroundColor) : undefined,
+      fontFamily: data.fontFamily ? String(data.fontFamily) : undefined,
+      secondaryColor: Array.isArray(data.brandColors) && (data.brandColors as string[])[1]
+        ? String((data.brandColors as string[])[1])
+        : undefined,
+    },
+    audience: {
+      description: String(data.audiencePersona || ''),
+    },
+    products,
+    features: {
+      heroFeature: String(data.heroFeature || coreActions[0] || ''),
+      primaryActions: coreActions as AppSpec['features']['primaryActions'],
+      userFlow: String(data.userFlow || ''),
+      differentiator: '',
+    },
+    content: {
+      welcomeMessage: `Welcome to ${data.name || 'our app'}! 🎉`,
+      quickActions: [
+        { icon: '🛒', label: 'Order', action: 'ordering' },
+        { icon: '📅', label: 'Book', action: 'booking' },
+        { icon: '📍', label: 'Visit', action: 'contact' },
+        { icon: '💬', label: 'Chat', action: 'messaging' },
+      ],
+      sections: [
+        { type: 'products', title: 'Featured', enabled: true },
+        { type: 'loyalty', title: 'Rewards', enabled: true },
+        { type: 'feed', title: 'Updates', enabled: true },
+        { type: 'contact', title: 'Contact', enabled: true },
+      ],
+    },
+    source: {
+      scrapedUrl: data.scrapedUrl ? String(data.scrapedUrl) : undefined,
+      scrapedImages: Array.isArray(data.scrapedImages) ? data.scrapedImages as string[] : undefined,
+    },
+    meta: {
+      completeness: 0,
+      missingFields: [],
+      createdAt: new Date().toISOString(),
+      merchantId,
+    },
+  };
+}
+
 router.post('/', async (req: Request, res: Response) => {
   // Validate
   const parsed = buildAppSchema.safeParse(req.body);
@@ -48,68 +138,7 @@ router.post('/', async (req: Request, res: Response) => {
   if (rawSpec && rawSpec.identity) {
     appSpec = rawSpec as unknown as AppSpec;
   } else {
-    const data = onboardingData || {};
-    appSpec = {
-      identity: {
-        name: String(data.name || 'Your App'),
-        tagline: String(data.description || '').slice(0, 80),
-        description: String(data.description || ''),
-        type: String(data.businessType || 'other') as AppSpec['identity']['type'],
-        category: String(data.businessType || ''),
-      },
-      brand: {
-        primaryColor: String(data.primaryColor || '#10F48B'),
-        vibe: (String(data.vibe || 'modern')) as AppSpec['brand']['vibe'],
-        logoUrl: data.logo ? String(data.logo) : undefined,
-        bannerUrl: data.banner ? String(data.banner) : undefined,
-        fontStyle: 'clean',
-        backgroundColor: data.backgroundColor ? String(data.backgroundColor) : undefined,
-        fontFamily: data.fontFamily ? String(data.fontFamily) : undefined,
-        secondaryColor: Array.isArray(data.brandColors) && (data.brandColors as string[])[1]
-          ? String((data.brandColors as string[])[1])
-          : undefined,
-      },
-      audience: {
-        description: String(data.audiencePersona || ''),
-      },
-      products: Array.isArray(data.products)
-        ? (data.products as string[]).map(p => {
-            const [name, price] = String(p).split(':');
-            return { name: name?.trim() || '', price: price?.trim() || '' };
-          }).filter(p => p.name)
-        : [],
-      features: {
-        heroFeature: String(data.heroFeature || ''),
-        primaryActions: [],
-        userFlow: String(data.userFlow || ''),
-        differentiator: '',
-      },
-      content: {
-        welcomeMessage: `Welcome to ${data.name || 'our app'}! 🎉`,
-        quickActions: [
-          { icon: '🛒', label: 'Order', action: 'ordering' },
-          { icon: '📅', label: 'Book', action: 'booking' },
-          { icon: '📍', label: 'Visit', action: 'contact' },
-          { icon: '💬', label: 'Chat', action: 'messaging' },
-        ],
-        sections: [
-          { type: 'products', title: 'Featured', enabled: true },
-          { type: 'loyalty', title: 'Rewards', enabled: true },
-          { type: 'feed', title: 'Updates', enabled: true },
-          { type: 'contact', title: 'Contact', enabled: true },
-        ],
-      },
-      source: {
-        scrapedUrl: data.scrapedUrl ? String(data.scrapedUrl) : undefined,
-        scrapedImages: Array.isArray(data.scrapedImages) ? data.scrapedImages as string[] : undefined,
-      },
-      meta: {
-        completeness: 0,
-        missingFields: [],
-        createdAt: new Date().toISOString(),
-        merchantId,
-      },
-    };
+    appSpec = buildAppSpecFromOnboarding(onboardingData || {}, merchantId);
   }
 
   // Calculate completeness
@@ -124,7 +153,13 @@ router.post('/', async (req: Request, res: Response) => {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
     'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no', // Disable Railway/nginx buffering
   });
+
+  // Keepalive ping every 15s to prevent proxy timeout
+  const keepalive = setInterval(() => {
+    try { res.write(': keepalive\n\n'); } catch { /* ignore */ }
+  }, 15_000);
 
   try {
     // ── Step 1: Provision GitHub repo ─────────────────────
@@ -147,23 +182,29 @@ router.post('/', async (req: Request, res: Response) => {
       message: 'Repository created ✓',
     });
 
-    // ── Steps 2-9: Deploy (vault → build → export → Vercel → Cloudflare) ──
+    // ── Steps 2-8: Full deploy pipeline ─────────────────
     const merchantSpec: MerchantAppSpec = {
-      // Pass through all spec data for vault writer (lower priority)
       ...(appSpec as unknown as Record<string, unknown>),
-      // Required MerchantAppSpec fields — must come after spread so they are not overridden
       id: merchantId,
-      slug: '',  // resolved to a unique slug during deploy
+      slug: '',
       region: 'SEA',
       appType: 'business',
       primaryLanguage: 'en',
       tokenBalance: 0,
       tokenUsed: 0,
-      // Core identity/build fields
       businessName,
       businessType: appSpec.identity.type || appSpec.identity.category || 'other',
       category: appSpec.identity.category || 'other',
       uiStyle: (appSpec.brand as Record<string, unknown>).uiStyle as string || 'outlined',
+      // Pass through coreActions for the code generator
+      coreActions: appSpec.features.primaryActions.length > 0
+        ? appSpec.features.primaryActions
+        : undefined,
+      ideaDescription: appSpec.identity.description,
+      audienceDescription: appSpec.audience.description,
+      primaryColor: appSpec.brand.primaryColor,
+      mood: appSpec.brand.vibe,
+      conversionGoal: appSpec.features.heroFeature,
       status: 'building',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -206,6 +247,7 @@ router.post('/', async (req: Request, res: Response) => {
       details: error.message,
     });
   } finally {
+    clearInterval(keepalive);
     res.end();
   }
 });
