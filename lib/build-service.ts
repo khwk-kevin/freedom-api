@@ -189,9 +189,11 @@ export async function runClaudeCodeBuild(
     const promptPath = `${buildDir}/.build-prompt.txt`;
     const scriptPath = `${buildDir}/.run-claude.sh`;
     await sshWriteFile(projectId, serviceId, promptPath, prompt);
+    // OAuth tokens use ANTHROPIC_AUTH_TOKEN, not ANTHROPIC_API_KEY
+    const envVar = token.startsWith('sk-ant-oat') ? 'ANTHROPIC_AUTH_TOKEN' : 'ANTHROPIC_API_KEY';
     const scriptContent = [
       '#!/bin/bash',
-      `export ANTHROPIC_API_KEY="${token}"`,
+      `export ${envVar}="${token}"`,
       `cd "${buildDir}"`,
       `claude --dangerously-skip-permissions --max-turns 100 -p "$(cat "${promptPath}")" 2>&1`,
       'exit $?',
