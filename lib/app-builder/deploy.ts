@@ -1,12 +1,13 @@
 /**
- * Freedom World App Builder — Production Deploy Flow (v3)
+ * Freedom World App Builder — Production Deploy Flow (v4)
  *
  * Architecture:
  *   Phase 1 (pre-signup):  Generate preview via AppSpec → preview URL with URL params
- *   Phase 2 (post-signup): Full deploy — generate page.tsx → build → Vercel + Cloudflare
+ *   Phase 2 (post-signup): Full deploy via Claude Code inside sandboxed build container
  *
- * The heavy build (clone → generate → compile → upload) only runs AFTER signup.
- * Pre-signup users see a live preview powered by the template's URL-param parsing.
+ * The heavy build only runs AFTER signup. Claude Code reads vault files (CLAUDE.md,
+ * context/, design/) and writes the custom page.tsx — merchant data is never directly
+ * interpolated into code (prevents prompt injection).
  */
 
 import { createServiceClient } from '../supabase/server';
@@ -20,14 +21,14 @@ import {
 import {
   prepareBuildEnvironment,
   writeBuildFile,
+  runClaudeCodeBuild,
   runStaticBuild,
   gitPushBuild,
   cleanupBuildEnvironment,
 } from '../build-service';
+import { generateVaultFiles } from './vault-writer';
 import { saveMerchantApp } from './persistence';
 import { sanitizeErrorForUser } from './error-handler';
-import { generateCustomPageTsx } from './code-generator';
-import { generateCustomLayoutTsx } from './layout-generator';
 import type { MerchantAppSpec } from './types';
 
 // ============================================================
@@ -76,16 +77,9 @@ async function resolveUniqueSlug(businessName: string): Promise<string> {
 // PREVIEW URL GENERATOR (pre-signup — no build needed)
 // ============================================================
 
-/**
- * Generates a preview URL that loads the template with the merchant's AppSpec
- * encoded as URL params. No build container, no Vercel project needed.
- *
- * Used during the interview before signup to show users what their app looks like.
- */
 export function generatePreviewUrl(spec: MerchantAppSpec): string {
   const TEMPLATE_BASE = process.env.PREVIEW_TEMPLATE_URL ?? 'https://freedom-app-builder.vercel.app';
 
-  // Build a minimal spec for URL params (keep it under URL length limits)
   const previewSpec = {
     identity: {
       name: spec.businessName || 'Your App',
@@ -118,16 +112,70 @@ export function generatePreviewUrl(spec: MerchantAppSpec): string {
 }
 
 // ============================================================
-// BUILD ERROR HANDLER
+// SELF-REVIEW CHECKLIST GENERATOR
 // ============================================================
 
-async function runBuildWithRetry(
+function generateSelfReviewChecklist(spec: MerchantAppSpec): string {
+  const businessName = spec.businessName || 'the business';
+  const primaryColor = spec.primaryColor || '#10F48B';
+  const productCount = spec.products?.length ?? 0;
+  const conversionGoal = spec.conversionGoal || 'main CTA';
+
+  const lines: string[] = [
+    `- [ ] Homepage hero mentions "${businessName}"`,
+    `- [ ] ${productCount > 0 ? `${productCount} products displayed with real names and prices` : 'All services/offerings displayed with real details'}`,
+    `- [ ] Primary color ${primaryColor} used consistently throughout`,
+    `- [ ] "${conversionGoal}" is prominent on the homepage`,
+    `- [ ] All required pages exist (check CLAUDE.md for page list)`,
+    `- [ ] Layout is unique to a ${spec.businessType || spec.category || 'this'} business — NOT a generic template`,
+    `- [ ] Mobile layout works correctly at 375px viewport width`,
+  ];
+
+  if (spec.mood) {
+    lines.push(`- [ ] "${spec.mood}" mood is reflected in typography and spacing`);
+  }
+  if (spec.audienceDescription) {
+    lines.push(`- [ ] Copy speaks to the target audience: ${spec.audienceDescription}`);
+  }
+  if (spec.userJourney) {
+    lines.push(`- [ ] User journey is supported: ${spec.userJourney}`);
+  }
+
+  return lines.join('\n');
+}
+
+// ============================================================
+// BUILD WITH AUTO-FIX
+// ============================================================
+
+async function runBuildWithAutoFix(
   merchantId: string
 ): Promise<{ success: true } | { success: false; sanitizedLogs: string }> {
+  // First attempt
   const buildResult = await runStaticBuild(merchantId);
   if (buildResult.success) return { success: true };
-  console.error(`[deploy] Build failed for ${merchantId}: ${buildResult.logs?.slice(0, 500)}`);
-  return { success: false, sanitizedLogs: sanitizeErrorForUser(buildResult.logs) };
+
+  console.warn(`[deploy] Initial build failed for ${merchantId}. Attempting auto-fix via Claude Code.`);
+
+  // Auto-fix: ask Claude Code to fix build errors
+  const autoFixPrompt =
+    `Build failed with these errors: ${sanitizeErrorForUser(buildResult.logs)}. ` +
+    `Fix the TypeScript/build errors so that \`npm run build\` succeeds. Do not change the app logic or design.`;
+
+  const fixResult = await runClaudeCodeBuild(merchantId, autoFixPrompt);
+  if (!fixResult.success) {
+    console.error(`[deploy] Auto-fix Claude Code failed for ${merchantId}.`);
+    return { success: false, sanitizedLogs: sanitizeErrorForUser(buildResult.logs) };
+  }
+
+  // Retry build
+  const retryResult = await runStaticBuild(merchantId);
+  if (retryResult.success) {
+    console.log(`[deploy] Build succeeded after auto-fix for ${merchantId}.`);
+    return { success: true };
+  }
+
+  return { success: false, sanitizedLogs: sanitizeErrorForUser(retryResult.logs) };
 }
 
 // ============================================================
@@ -140,13 +188,14 @@ async function runBuildWithRetry(
  *
  * Pipeline:
  *  1. Clone template repo into build container
- *  2. Generate custom page.tsx + layout.tsx from MerchantAppSpec
- *  3. Write files to build container
- *  4. Run npm run build (static export)
- *  5. Upload static files to Vercel
- *  6. Create Cloudflare CNAME
- *  7. Persist to Supabase
- *  8. Cleanup
+ *  2. Write vault files (CLAUDE.md, context/, design/) from MerchantAppSpec
+ *  3. Claude Code Pass 1 — Build the app (reads vault files, writes page.tsx)
+ *  4. Claude Code Pass 2 — Self-review against spec
+ *  5. Claude Code Pass 3 — QA & polish
+ *  6. Static export (npm run build) with auto-fix
+ *  7. Git push, Vercel project + domain, Cloudflare DNS
+ *  8. Upload static files to Vercel
+ *  9. Persist to Supabase
  */
 export async function deployMerchantApp(
   merchantId: string,
@@ -165,21 +214,80 @@ export async function deployMerchantApp(
     await prepareBuildEnvironment(cloneUrl, merchantId);
     progress('build_ready', 'Build environment ready ✓');
 
-    // ── Step 2: Generate custom page.tsx + layout.tsx ────────
-    progress('generate_start', 'Generating your custom app...');
+    // ── Step 2: Write vault files ───────────────────────────
+    progress('vault_start', 'Writing your app spec...');
+    const vaultFiles = generateVaultFiles(spec);
+    for (const file of vaultFiles) {
+      await writeBuildFile(merchantId, file.path, file.content);
+    }
+    progress('vault_done', 'App spec saved ✓');
 
-    const customPageTsx = generateCustomPageTsx(spec);
-    const customLayoutTsx = generateCustomLayoutTsx(spec);
+    // ── Step 3: Claude Code Pass 1 — Build ──────────────────
+    progress('build_start', 'Building your app with AI...');
 
-    // Write both files to build container
-    await writeBuildFile(merchantId, 'src/app/page.tsx', customPageTsx);
-    await writeBuildFile(merchantId, 'src/app/layout.tsx', customLayoutTsx);
+    const businessType = spec.businessType || spec.category || 'app';
+    const businessName = spec.businessName || 'the app';
+    const description = spec.ideaDescription || spec.scrapedData?.description || `a ${businessType} app`;
+    const uiStyle = spec.uiStyle || 'outlined';
+    const primaryColor = spec.primaryColor || '#10F48B';
+    const mood = spec.mood || 'modern';
 
-    progress('generate_done', 'App generated ✓');
+    const productNames = spec.products?.slice(0, 5).map(p => p.name).join(', ') || '';
+    const productHint = productNames ? ` Products/items: ${productNames}.` : '';
+    const audienceHint = spec.audienceDescription ? ` Target audience: ${spec.audienceDescription}.` : '';
 
-    // ── Step 3: Static export (npm run build) ───────────────
-    progress('compile_start', 'Compiling your app...');
-    const buildPassed = await runBuildWithRetry(merchantId);
+    const buildPrompt =
+      `Read CLAUDE.md first — it contains the EXACT requirements for this specific app. ` +
+      `This is "${businessName}" — ${description}. ` +
+      `Build a UNIQUE ${businessType} app that looks and feels custom-built for this purpose. ` +
+      `NOT a generic template — the layout, hero, sections, and interactions should all be specific to a ${businessType}.${productHint}${audienceHint} ` +
+      `Design: ${mood} mood, ${uiStyle} style, primary color ${primaryColor}. Use the background color from design/theme.json — do NOT assume dark theme. ` +
+      `Use real data from context/business.md. No placeholder text. Mobile-first. ` +
+      `After building, run the TypeScript compiler to verify no errors. ` +
+      `Focus on page structure, routing, and component hierarchy. Use real data from context/business.md and design tokens from design/theme.json.`;
+
+    const claudeResult = await runClaudeCodeBuild(merchantId, buildPrompt);
+    if (!claudeResult.success) {
+      progress('build_failed', 'Build had issues, attempting fix...');
+    }
+    progress('build_done', 'App built ✓');
+
+    // ── Step 4: Claude Code Pass 2 — Self-Review ────────────
+    progress('review_start', 'Reviewing against your requirements...');
+
+    const checklist = generateSelfReviewChecklist(spec);
+    const reviewPrompt =
+      `Self-review against CLAUDE.md. Check the following spec-specific requirements:\n${checklist}\n\n` +
+      `Also verify: 1) Do all required pages exist? 2) Are ALL products from context/business.md displayed with real names/prices? ` +
+      `3) Does the color scheme match design/theme.json? 4) Is the layout unique to this business type or generic? ` +
+      `5) Is there a clear CTA on the homepage? 6) Does mobile work at 375px? Fix anything that fails.`;
+
+    const reviewResult = await runClaudeCodeBuild(merchantId, reviewPrompt);
+    if (!reviewResult.success) {
+      console.warn(`[deploy] Pass 2 (self-review) failed for ${merchantId} — continuing.`);
+    }
+    progress('review_done', 'Review complete ✓');
+
+    // ── Step 5: Claude Code Pass 3 — QA & Polish ────────────
+    progress('polish_start', 'Final polish...');
+
+    const polishPrompt =
+      `Final QA. 1) Remove any placeholder text (Lorem ipsum, Your Business Here). ` +
+      `2) Ensure images reference real paths in /public/assets/. ` +
+      `3) Check buttons and links have hover states. ` +
+      `4) Verify primary CTA is above the fold on mobile. ` +
+      `5) Ensure consistent spacing and typography. ` +
+      `6) Run TypeScript compiler and fix errors.`;
+
+    const polishResult = await runClaudeCodeBuild(merchantId, polishPrompt);
+    if (!polishResult.success) {
+      console.warn(`[deploy] Pass 3 (QA & polish) failed for ${merchantId} — continuing.`);
+    }
+    progress('polish_done', 'Polish complete ✓');
+
+    // ── Step 6: Static export with auto-fix ─────────────────
+    progress('export_start', 'Creating production build...');
+    const buildPassed = await runBuildWithAutoFix(merchantId);
 
     if (!buildPassed.success) {
       await cleanupBuildEnvironment(merchantId);
@@ -188,25 +296,23 @@ export async function deployMerchantApp(
         buildLogs: buildPassed.sanitizedLogs,
       };
     }
-    progress('compile_done', 'Compiled ✓');
+    progress('export_done', 'Production build complete ✓');
 
-    // ── Step 4: Git push (for version control) ──────────────
+    // ── Step 7: Git push + Vercel project + Cloudflare ──────
     progress('deploy_start', 'Deploying to your domain...');
     await gitPushBuild(merchantId);
 
-    // ── Step 5: Vercel project + domain ─────────────────────
-    const businessName = spec.businessName || 'app';
-    const slug = await resolveUniqueSlug(businessName);
+    const businessNameForSlug = spec.businessName || 'app';
+    const slug = await resolveUniqueSlug(businessNameForSlug);
     const domain = `${slug}.app.freedom.world`;
     const projectName = `fw-app-${slug}`;
 
     const { projectId: vercelProjectId } = await createVercelProject(slug);
     await assignVercelDomain(vercelProjectId, domain);
 
-    // ── Step 6: Cloudflare DNS ──────────────────────────────
     const { recordId: cloudflareRecordId } = await createMerchantDnsRecord(slug);
 
-    // ── Step 7: Upload static files to Vercel ───────────────
+    // ── Step 8: Upload static files to Vercel ───────────────
     progress('upload_start', 'Uploading app files...');
     const buildFiles = await readBuildOutputFiles(merchantId);
     await deployFilesToVercel(vercelProjectId, projectName, buildFiles);
@@ -215,7 +321,7 @@ export async function deployMerchantApp(
     const productionUrl = `https://${domain}`;
     progress('deploy_done', `Live at ${productionUrl} ✓`);
 
-    // ── Step 8: Persist to Supabase ─────────────────────────
+    // ── Step 9: Persist to Supabase ─────────────────────────
     spec.status = 'deployed';
     spec.productionUrl = productionUrl;
     spec.slug = slug;
