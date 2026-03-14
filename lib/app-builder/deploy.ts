@@ -21,11 +21,11 @@ import {
 import {
   prepareBuildEnvironment,
   writeBuildFile,
-  runClaudeCodeBuild,
   runStaticBuild,
   gitPushBuild,
   cleanupBuildEnvironment,
 } from '../build-service';
+import { runFullSdkBuild } from './sdk-builder';
 import { generateVaultFiles } from './vault-writer';
 import { saveMerchantApp } from './persistence';
 import { sanitizeErrorForUser } from './error-handler';
@@ -155,16 +155,18 @@ async function runBuildWithAutoFix(
   const buildResult = await runStaticBuild(merchantId);
   if (buildResult.success) return { success: true };
 
-  console.warn(`[deploy] Initial build failed for ${merchantId}. Attempting auto-fix via Claude Code.`);
+  console.warn(`[deploy] Initial build failed for ${merchantId}. Attempting auto-fix via SDK.`);
 
-  // Auto-fix: ask Claude Code to fix build errors
+  // Auto-fix: ask the SDK to fix build errors
+  const { runSdkBuild } = await import('./sdk-builder');
   const autoFixPrompt =
-    `Build failed with these errors: ${sanitizeErrorForUser(buildResult.logs)}. ` +
-    `Fix the TypeScript/build errors so that \`npm run build\` succeeds. Do not change the app logic or design.`;
+    `The Next.js build (\`npm run build\`) failed with these errors:\n${sanitizeErrorForUser(buildResult.logs)}\n\n` +
+    `Fix the TypeScript/build errors so that the build succeeds. Do not change the app logic or design.\n` +
+    `Output corrected files using:\n=== FILE: path/to/file ===\n\`\`\`tsx\n... content ...\n\`\`\``;
 
-  const fixResult = await runClaudeCodeBuild(merchantId, autoFixPrompt);
+  const fixResult = await runSdkBuild(merchantId, autoFixPrompt);
   if (!fixResult.success) {
-    console.error(`[deploy] Auto-fix Claude Code failed for ${merchantId}.`);
+    console.error(`[deploy] Auto-fix SDK failed for ${merchantId}.`);
     return { success: false, sanitizedLogs: sanitizeErrorForUser(buildResult.logs) };
   }
 
@@ -222,68 +224,32 @@ export async function deployMerchantApp(
     }
     progress('vault_done', 'App spec saved ✓');
 
-    // ── Step 3: Claude Code Pass 1 — Build ──────────────────
-    progress('build_start', 'Building your app with AI...');
+    // ── Steps 3-5: SDK Build (3-pass: build → review → polish) ──
+    const sdkResult = await runFullSdkBuild(
+      merchantId,
+      {
+        businessName: spec.businessName,
+        businessType: spec.businessType || spec.category,
+        ideaDescription: spec.ideaDescription || spec.scrapedData?.description,
+        primaryColor: spec.primaryColor,
+        mood: spec.mood,
+        uiStyle: spec.uiStyle,
+        products: spec.products,
+        audienceDescription: spec.audienceDescription,
+        conversionGoal: spec.conversionGoal,
+        coreActions: spec.coreActions,
+        userJourney: spec.userJourney,
+      },
+      (step, message) => progress(step, message)
+    );
 
-    const businessType = spec.businessType || spec.category || 'app';
-    const businessName = spec.businessName || 'the app';
-    const description = spec.ideaDescription || spec.scrapedData?.description || `a ${businessType} app`;
-    const uiStyle = spec.uiStyle || 'outlined';
-    const primaryColor = spec.primaryColor || '#10F48B';
-    const mood = spec.mood || 'modern';
-
-    const productNames = spec.products?.slice(0, 5).map(p => p.name).join(', ') || '';
-    const productHint = productNames ? ` Products/items: ${productNames}.` : '';
-    const audienceHint = spec.audienceDescription ? ` Target audience: ${spec.audienceDescription}.` : '';
-
-    const buildPrompt =
-      `Read CLAUDE.md first — it contains the EXACT requirements for this specific app. ` +
-      `This is "${businessName}" — ${description}. ` +
-      `Build a UNIQUE ${businessType} app that looks and feels custom-built for this purpose. ` +
-      `NOT a generic template — the layout, hero, sections, and interactions should all be specific to a ${businessType}.${productHint}${audienceHint} ` +
-      `Design: ${mood} mood, ${uiStyle} style, primary color ${primaryColor}. Use the background color from design/theme.json — do NOT assume dark theme. ` +
-      `Use real data from context/business.md. No placeholder text. Mobile-first. ` +
-      `After building, run the TypeScript compiler to verify no errors. ` +
-      `Focus on page structure, routing, and component hierarchy. Use real data from context/business.md and design tokens from design/theme.json.`;
-
-    const claudeResult = await runClaudeCodeBuild(merchantId, buildPrompt);
-    if (!claudeResult.success) {
-      progress('build_failed', 'Build had issues, attempting fix...');
+    if (!sdkResult.success) {
+      await cleanupBuildEnvironment(merchantId);
+      return {
+        error: 'AI build failed. Our team has been notified.',
+        buildLogs: sdkResult.error || 'Build produced no files',
+      };
     }
-    progress('build_done', 'App built ✓');
-
-    // ── Step 4: Claude Code Pass 2 — Self-Review ────────────
-    progress('review_start', 'Reviewing against your requirements...');
-
-    const checklist = generateSelfReviewChecklist(spec);
-    const reviewPrompt =
-      `Self-review against CLAUDE.md. Check the following spec-specific requirements:\n${checklist}\n\n` +
-      `Also verify: 1) Do all required pages exist? 2) Are ALL products from context/business.md displayed with real names/prices? ` +
-      `3) Does the color scheme match design/theme.json? 4) Is the layout unique to this business type or generic? ` +
-      `5) Is there a clear CTA on the homepage? 6) Does mobile work at 375px? Fix anything that fails.`;
-
-    const reviewResult = await runClaudeCodeBuild(merchantId, reviewPrompt);
-    if (!reviewResult.success) {
-      console.warn(`[deploy] Pass 2 (self-review) failed for ${merchantId} — continuing.`);
-    }
-    progress('review_done', 'Review complete ✓');
-
-    // ── Step 5: Claude Code Pass 3 — QA & Polish ────────────
-    progress('polish_start', 'Final polish...');
-
-    const polishPrompt =
-      `Final QA. 1) Remove any placeholder text (Lorem ipsum, Your Business Here). ` +
-      `2) Ensure images reference real paths in /public/assets/. ` +
-      `3) Check buttons and links have hover states. ` +
-      `4) Verify primary CTA is above the fold on mobile. ` +
-      `5) Ensure consistent spacing and typography. ` +
-      `6) Run TypeScript compiler and fix errors.`;
-
-    const polishResult = await runClaudeCodeBuild(merchantId, polishPrompt);
-    if (!polishResult.success) {
-      console.warn(`[deploy] Pass 3 (QA & polish) failed for ${merchantId} — continuing.`);
-    }
-    progress('polish_done', 'Polish complete ✓');
 
     // ── Step 6: Static export with auto-fix ─────────────────
     progress('export_start', 'Creating production build...');
