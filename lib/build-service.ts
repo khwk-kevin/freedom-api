@@ -192,7 +192,8 @@ export async function runClaudeCodeBuild(
 
     // Inject the OAuth token as env var prefix so Claude Code uses it
     // Run as 'builder' user — Claude Code refuses --dangerously-skip-permissions as root
-    const cmd = `su builder -c 'ANTHROPIC_API_KEY=${token} claude -p "${escapedPrompt}" --dangerously-skip-permissions --max-turns 100 --cwd ${buildDir}' </dev/null`;
+    // sudo -E preserves ANTHROPIC_API_KEY from the parent env
+    const cmd = `ANTHROPIC_API_KEY=${token} sudo -E -u builder claude -p "${escapedPrompt}" --dangerously-skip-permissions --max-turns 100 --cwd ${buildDir} </dev/null`;
 
     const result = await sshExecCommand(projectId, serviceId, cmd);
 
