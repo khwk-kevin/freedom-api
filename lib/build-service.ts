@@ -153,7 +153,16 @@ export async function writeBuildFile(
 ): Promise<void> {
   const { projectId, serviceId } = getBuildService();
   const fullPath = `/workspace/builds/${merchantId}/${filePath}`;
+  console.log(`[build-service] Writing ${filePath} (${content.length} bytes) to ${fullPath}`);
   await sshWriteFile(projectId, serviceId, fullPath, content);
+  
+  // Verify the write by reading back the first line
+  const verifyResult = await sshExecCommand(projectId, serviceId, `head -1 "${fullPath}"`);
+  if (verifyResult.exitCode !== 0) {
+    console.error(`[build-service] VERIFY FAILED for ${filePath}: ${verifyResult.stderr}`);
+    throw new Error(`Write verification failed for ${filePath}`);
+  }
+  console.log(`[build-service] Verified ${filePath}: "${verifyResult.stdout.trim().slice(0, 60)}"`);
 }
 
 /**
@@ -248,11 +257,17 @@ export async function gitPushBuild(merchantId: string): Promise<void> {
   const { projectId, serviceId } = getBuildService();
   const buildDir = `/workspace/builds/${merchantId}`;
 
-  await sshExecCommand(
+  const gitResult = await sshExecCommand(
     projectId,
     serviceId,
-    `cd ${buildDir} && git add -A && git commit -m "build: production $(date)" && git push || true`
+    `cd ${buildDir} && git add -A && git status --short && git commit -m "build: production $(date)" && git push`
   );
+  if (gitResult.exitCode !== 0) {
+    console.error(`[build-service] Git push failed for ${merchantId}: ${gitResult.stderr}`);
+    // Don't throw — the build is still valid even if push fails
+  } else {
+    console.log(`[build-service] Git pushed for ${merchantId}: ${gitResult.stdout.slice(0, 200)}`);
+  }
 }
 
 /**
