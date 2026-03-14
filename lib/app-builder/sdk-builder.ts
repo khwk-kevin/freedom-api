@@ -19,9 +19,16 @@ import { sshExecCommand, sshWriteFile } from './railway';
 // ============================================================
 
 function getClient(): Anthropic {
-  const key = process.env.ANTHROPIC_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY;
-  if (!key) throw new Error('No Anthropic credentials configured');
-  return new Anthropic({ apiKey: key });
+  // Prefer OAuth token (ANTHROPIC_AUTH_TOKEN) — same tokens powering OpenClaw/AVA
+  // Falls back to API key if no OAuth token is set
+  const authToken = process.env.ANTHROPIC_AUTH_TOKEN || null;
+  const apiKey = process.env.ANTHROPIC_API_KEY || null;
+
+  if (!authToken && !apiKey) {
+    throw new Error('No Anthropic credentials configured (need ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY)');
+  }
+
+  return new Anthropic({ authToken, apiKey });
 }
 
 // ============================================================
