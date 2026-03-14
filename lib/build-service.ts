@@ -188,7 +188,7 @@ export async function runClaudeCodeBuild(
     console.log(`[build-service] Claude Code build attempt ${attempt + 1}/${maxAttempts} (token #${index + 1})`);
 
     // Inject the OAuth token as env var prefix so Claude Code uses it
-    const cmd = `ANTHROPIC_API_KEY=${token} claude -p "${escapedPrompt}" --dangerously-skip-permissions --max-turns 100 --cwd ${buildDir}`;
+    const cmd = `ANTHROPIC_API_KEY=${token} claude -p "${escapedPrompt}" --permission-mode bypassPermissions --max-turns 100 --cwd ${buildDir}`;
 
     const result = await sshExecCommand(projectId, serviceId, cmd);
 
