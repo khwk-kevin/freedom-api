@@ -68,6 +68,46 @@ async function resolveUniqueSlug(businessName: string): Promise<string> {
 }
 
 // ============================================================
+// SELF-REVIEW CHECKLIST GENERATOR
+// ============================================================
+
+/**
+ * Generates a spec-specific checklist for the self-review pass (Pass 2).
+ * Each item is tailored to the merchant's actual data so Claude Code can
+ * verify the build against real requirements.
+ */
+export function generateSelfReviewChecklist(spec: MerchantAppSpec): string {
+  const businessName = spec.businessName || 'the business';
+  const primaryColor = spec.primaryColor || '#10F48B';
+  const productCount = spec.products?.length ?? 0;
+  const conversionGoal = spec.conversionGoal || 'main CTA';
+
+  const lines: string[] = [
+    `- [ ] Homepage hero mentions "${businessName}"`,
+    `- [ ] ${productCount > 0 ? `${productCount} products displayed with real names and prices` : 'All services/offerings displayed with real details'}`,
+    `- [ ] Primary color ${primaryColor} used consistently throughout`,
+    `- [ ] "${conversionGoal}" is prominent on the homepage`,
+    `- [ ] All required pages exist (check CLAUDE.md for page list)`,
+    `- [ ] Layout is unique to a ${spec.businessType || spec.category || 'this'} business — NOT a generic template`,
+    `- [ ] Mobile layout works correctly at 375px viewport width`,
+  ];
+
+  if (spec.mood) {
+    lines.push(`- [ ] "${spec.mood}" mood is reflected in typography and spacing`);
+  }
+
+  if (spec.audienceDescription) {
+    lines.push(`- [ ] Copy speaks to the target audience: ${spec.audienceDescription}`);
+  }
+
+  if (spec.userJourney) {
+    lines.push(`- [ ] User journey is supported: ${spec.userJourney}`);
+  }
+
+  return lines.join('\n');
+}
+
+// ============================================================
 // BUILD WITH AUTO-FIX
 // ============================================================
 
@@ -117,16 +157,18 @@ async function runBuildWithAutoFix(
  * Full production deploy for a merchant app.
  *
  * Pipeline:
- * 1. Prepare build environment (clone repo into shared build container)
- * 2. Write vault files from AppSpec
- * 3. Run Claude Code build (customizes template)
- * 4. Static export (npm run build)
- * 5. Git push to GitHub
- * 6. Vercel: create project + assign domain
- * 7. Cloudflare: create CNAME record
- * 8. Wait for Vercel deployment
- * 9. Persist to Supabase
- * 10. Cleanup build container
+ *  1. Prepare build environment (clone repo into shared build container)
+ *  2. Write vault files from AppSpec
+ *  3. Pass 1 — Structure & Layout (Claude Code: build the app)
+ *  4. Pass 2 — Self-Review (Claude Code: verify against spec & fix gaps)
+ *  5. Pass 3 — QA & Polish (Claude Code: remove placeholders, fix TS)
+ *  6. Static export (npm run build)
+ *  7. Git push to GitHub
+ *  8. Vercel: create project + assign domain
+ *  9. Cloudflare: create CNAME record
+ * 10. Upload static files to Vercel
+ * 11. Persist to Supabase
+ * 12. Cleanup build container
  */
 export async function deployMerchantApp(
   merchantId: string,
@@ -153,7 +195,7 @@ export async function deployMerchantApp(
     }
     progress('vault_done', 'App spec saved ✓');
 
-    // ── Step 3: Claude Code build ───────────────────────────
+    // ── Step 3: Pass 1 — Structure & Layout ─────────────────
     progress('build_start', 'Building your app with AI...');
 
     const businessType = spec.businessType || spec.category || 'app';
@@ -177,7 +219,8 @@ export async function deployMerchantApp(
       `NOT a generic template — the layout, hero, sections, and interactions should all be specific to a ${businessType}.${productHint}${audienceHint} ` +
       `Design: ${mood} mood, ${uiStyle} style, primary color ${primaryColor}. Use the background color from design/theme.json — do NOT assume dark theme. ` +
       `Use real data from context/business.md. No placeholder text. Mobile-first. ` +
-      `After building, run the TypeScript compiler to verify no errors.`;
+      `After building, run the TypeScript compiler to verify no errors. ` +
+      `Focus on page structure, routing, and component hierarchy. Use real data from context/business.md and design tokens from design/theme.json.`;
 
     const claudeResult = await runClaudeCodeBuild(merchantId, buildPrompt);
 
@@ -187,7 +230,42 @@ export async function deployMerchantApp(
     }
     progress('build_done', 'App built ✓');
 
-    // ── Step 4: Static export ───────────────────────────────
+    // ── Step 4: Pass 2 — Self-Review ────────────────────────
+    progress('review_start', 'Reviewing against your requirements...');
+
+    const checklist = generateSelfReviewChecklist(spec);
+    const reviewPrompt =
+      `Self-review against CLAUDE.md. Check the following spec-specific requirements:\n${checklist}\n\n` +
+      `Also verify: 1) Do all required pages exist? 2) Are ALL products from context/business.md displayed with real names/prices? ` +
+      `3) Does the color scheme match design/theme.json? 4) Is the layout unique to this business type or generic? ` +
+      `5) Is there a clear CTA on the homepage? 6) Does mobile work at 375px? Fix anything that fails.`;
+
+    const reviewResult = await runClaudeCodeBuild(merchantId, reviewPrompt);
+
+    if (!reviewResult.success) {
+      console.warn(`[deploy] Pass 2 (self-review) failed for ${merchantId} — continuing.`);
+    }
+    progress('review_done', 'Review complete ✓');
+
+    // ── Step 5: Pass 3 — QA & Polish ────────────────────────
+    progress('polish_start', 'Final polish...');
+
+    const polishPrompt =
+      `Final QA. 1) Remove any placeholder text (Lorem ipsum, Your Business Here). ` +
+      `2) Ensure images reference real paths in /public/assets/. ` +
+      `3) Check buttons and links have hover states. ` +
+      `4) Verify primary CTA is above the fold on mobile. ` +
+      `5) Ensure consistent spacing and typography. ` +
+      `6) Run TypeScript compiler and fix errors.`;
+
+    const polishResult = await runClaudeCodeBuild(merchantId, polishPrompt);
+
+    if (!polishResult.success) {
+      console.warn(`[deploy] Pass 3 (QA & polish) failed for ${merchantId} — continuing.`);
+    }
+    progress('polish_done', 'Polish complete ✓');
+
+    // ── Step 6: Static export ───────────────────────────────
     progress('export_start', 'Creating production build...');
     const buildPassed = await runBuildWithAutoFix(merchantId);
 
@@ -200,12 +278,11 @@ export async function deployMerchantApp(
     }
     progress('export_done', 'Production build complete ✓');
 
-    // ── Step 5: Git push ────────────────────────────────────
+    // ── Step 7: Git push ────────────────────────────────────
     progress('deploy_start', 'Deploying to your domain...');
     await gitPushBuild(merchantId);
 
-    // ── Step 6: Vercel project + domain ─────────────────────
-    const businessName = spec.businessName ?? merchantId;
+    // ── Step 8: Vercel project + domain ─────────────────────
     const slug = await resolveUniqueSlug(businessName);
     const domain = `${slug}.app.freedom.world`;
     const projectName = `fw-app-${slug}`;
@@ -213,10 +290,10 @@ export async function deployMerchantApp(
     const { projectId: vercelProjectId } = await createVercelProject(slug);
     await assignVercelDomain(vercelProjectId, domain);
 
-    // ── Step 7: Cloudflare DNS ──────────────────────────────
+    // ── Step 9: Cloudflare DNS ──────────────────────────────
     const { recordId: cloudflareRecordId } = await createMerchantDnsRecord(slug);
 
-    // ── Step 8: Upload static files directly to Vercel ──────
+    // ── Step 10: Upload static files directly to Vercel ─────
     progress('upload_start', 'Uploading app files to Vercel...');
     const buildFiles = await readBuildOutputFiles(merchantId);
     await deployFilesToVercel(vercelProjectId, projectName, buildFiles);
@@ -225,7 +302,7 @@ export async function deployMerchantApp(
     const productionUrl = `https://${domain}`;
     progress('deploy_done', 'Deployed ✓');
 
-    // ── Step 9: Persist ─────────────────────────────────────
+    // ── Step 11: Persist ────────────────────────────────────
     spec.status = 'deployed';
     spec.productionUrl = productionUrl;
     spec.slug = slug;
@@ -241,7 +318,7 @@ export async function deployMerchantApp(
       console.error(`[deploy] Supabase save failed (non-fatal):`, saveErr);
     }
 
-    // ── Step 10: Cleanup ────────────────────────────────────
+    // ── Step 12: Cleanup ─────────────────────────────────────
     void cleanupBuildEnvironment(merchantId);
 
     return { productionUrl };

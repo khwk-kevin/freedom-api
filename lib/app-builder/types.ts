@@ -93,6 +93,7 @@ export interface ScrapedBusinessData {
   priceLevel?: 1 | 2 | 3 | 4;    // $ to $$$$
   latitude?: number;               // GPS latitude (from Google Maps)
   longitude?: number;              // GPS longitude (from Google Maps)
+  backgroundColor?: string;        // Dominant background color detected from brand website
   rawHtml?: string;                // Optional: scraped page HTML (for re-processing)
   scrapedAt?: string;              // ISO timestamp
 }
@@ -141,6 +142,12 @@ export interface MerchantAppSpec {
   primaryLanguage: string;
 
   selectedFeatures?: string[];
+
+  userJourney?: string;        // "browse menu → pick items → reserve table → confirm"
+  conversionGoal?: string;     // "make a reservation"
+  designReference?: string;    // URL for design inspiration
+  firstImpression?: string;    // "warm welcome with today's specials"
+  interactionStyle?: string;   // "scroll-through catalog" or "swipeable cards"
 
   scrapedData?: ScrapedBusinessData;
 

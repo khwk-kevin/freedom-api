@@ -99,6 +99,11 @@ Available tags:
   [[ANTI_PREFS:no dark theme,no corporate]]— comma-separated anti-preferences
   [[AUDIENCE:young professionals and foodies in Bangkok]]
   [[FEATURES:ordering,gallery,loyalty]]    — comma-separated from approved list
+  [[USER_JOURNEY:browse menu → pick items → reserve table → get confirmation]]
+  [[CONVERSION_GOAL:make a reservation]]  — the ONE thing every visitor should do
+  [[DESIGN_REF:https://example.com]]      — URL for design inspiration (optional)
+  [[FIRST_IMPRESSION:user sees a warm welcome with today's specials]]
+  [[INTERACTION_STYLE:scroll-through catalog]] — how users interact with content
   [[STEP:phase1a_complete]]               — emit AFTER color is confirmed (Q4 done)
   [[STEP:phase1b_complete]]               — emit AFTER review/tweaks done (Q10 done)
 
@@ -200,6 +205,12 @@ Emit: [[PRODUCTS_DETAIL:[{...},{...}]]]
 If they give you a list casually ("we have pad thai, green curry, som tum..."), convert it.
 If they're vague, ask one follow-up: "Roughly how many items, and are there different categories?"
 
+Once products are captured, ask about the flow naturally:
+"When someone opens your app, what's their journey? Browse → pick → buy? Or discover → book → confirm?"
+
+Emit: [[USER_JOURNEY:browse menu → pick items → reserve table → get confirmation]]
+If their answer also implies a clear interaction style (scrolling catalog, swipeable cards, etc.), emit: [[INTERACTION_STYLE:...]]
+
 ─── Q6: Priorities ──────────────────────
 
 Goal: Understand what matters most so the right pages get built first.
@@ -217,6 +228,11 @@ Options to mention (adjust based on their business):
 Get their top 2–3 priorities.
 Emit: [[PRIORITIES:menu,gallery,contact]]
 
+Then ask: "What's the ONE thing you want every visitor to do?"
+(This could be "make a reservation", "place an order", "book a class", etc.)
+
+Emit: [[CONVERSION_GOAL:make a reservation]]
+
 ─── Q7: Anti-preferences ────────────────
 
 Goal: Avoid what they hate. This shapes the aesthetic negatively (what NOT to do).
@@ -227,6 +243,10 @@ Examples of what they might say: "nothing too dark", "don't make it look corpora
 
 If they say "no" or "I'm fine with anything", skip and emit nothing — don't force this.
 Emit: [[ANTI_PREFS:no dark theme,no corporate feel]]
+
+Then ask lightly: "Is there an app or website you love the look of? Drop a link if you have one — totally optional."
+If they share one, emit: [[DESIGN_REF:https://...]]
+If they pass or say no, that's fine — don't push.
 
 ─── Q8: Audience ────────────────────────
 
@@ -253,6 +273,11 @@ Ask: "Which ones would you like? Pick as many as you want."
 
 Emit: [[FEATURES:ordering,gallery,loyalty]]
 (Use short slugs: ordering, booking, loyalty, community, gallery, contact, whatsapp, notifications, gamification)
+
+After features are captured, ask: "When someone opens your app for the first time, what should they see and feel?"
+(Think: hero image, welcome message, a daily special, a vibe — what's the opening moment?)
+
+Emit: [[FIRST_IMPRESSION:user sees a warm welcome with today's specials]]
 
 ─── Q10: Review + tweaks ────────────────
 
@@ -364,6 +389,30 @@ export function getPhase1bPrompt(spec: MerchantAppSpec): string {
     ? `Products captured: ${spec.products.length} items`
     : 'Products: not yet captured';
 
+  const userJourneyNote = spec.userJourney
+    ? `User journey: ${spec.userJourney}`
+    : '';
+
+  const conversionGoalNote = spec.conversionGoal
+    ? `Conversion goal: ${spec.conversionGoal}`
+    : '';
+
+  const designRefNote = spec.designReference
+    ? `Design reference: ${spec.designReference}`
+    : '';
+
+  const firstImpressionNote = spec.firstImpression
+    ? `First impression: ${spec.firstImpression}`
+    : '';
+
+  const interactionStyleNote = spec.interactionStyle
+    ? `Interaction style: ${spec.interactionStyle}`
+    : '';
+
+  const intentNotes = [userJourneyNote, conversionGoalNote, designRefNote, firstImpressionNote, interactionStyleNote]
+    .filter(Boolean)
+    .join('\n');
+
   return `
 The user just signed up. Phase 1a is complete. Resume the interview at Phase 1b.
 
@@ -376,7 +425,7 @@ Language: ${spec.primaryLanguage ?? 'en'}
 ${scrapeNote}
 ${moodNote}
 ${colorNote}
-${productsNote}
+${productsNote}${intentNotes ? `\n${intentNotes}` : ''}
 
 ─── YOUR TASK ───────────────────────────
 

@@ -214,6 +214,11 @@ interface ExtractedTags {
   STEP?: string[];
   APP_TYPE?: string;
   IDEA_DESCRIPTION?: string;
+  USER_JOURNEY?: string;
+  CONVERSION_GOAL?: string;
+  DESIGN_REF?: string;
+  FIRST_IMPRESSION?: string;
+  INTERACTION_STYLE?: string;
 }
 
 /**
@@ -308,6 +313,11 @@ function parseTagsFromResponse(aiResponse: string): ExtractedTags {
       case 'FEATURES':
       case 'APP_TYPE':
       case 'IDEA_DESCRIPTION':
+      case 'USER_JOURNEY':
+      case 'CONVERSION_GOAL':
+      case 'DESIGN_REF':
+      case 'FIRST_IMPRESSION':
+      case 'INTERACTION_STYLE':
         (tags as Record<string, string>)[tagName] = value;
         break;
       default:
@@ -473,6 +483,31 @@ export function updateSpecFromExtractions(
   // ── IDEA_DESCRIPTION ──────────────────────────────────────
   if (tags.IDEA_DESCRIPTION) {
     updated.ideaDescription = tags.IDEA_DESCRIPTION.trim();
+  }
+
+  // ── USER_JOURNEY ──────────────────────────────────────────
+  if (tags.USER_JOURNEY) {
+    updated.userJourney = tags.USER_JOURNEY.trim();
+  }
+
+  // ── CONVERSION_GOAL ───────────────────────────────────────
+  if (tags.CONVERSION_GOAL) {
+    updated.conversionGoal = tags.CONVERSION_GOAL.trim();
+  }
+
+  // ── DESIGN_REF ────────────────────────────────────────────
+  if (tags.DESIGN_REF) {
+    updated.designReference = tags.DESIGN_REF.trim();
+  }
+
+  // ── FIRST_IMPRESSION ──────────────────────────────────────
+  if (tags.FIRST_IMPRESSION) {
+    updated.firstImpression = tags.FIRST_IMPRESSION.trim();
+  }
+
+  // ── INTERACTION_STYLE ─────────────────────────────────────
+  if (tags.INTERACTION_STYLE) {
+    updated.interactionStyle = tags.INTERACTION_STYLE.trim();
   }
 
   // ── STEP tags ─────────────────────────────────────────────
