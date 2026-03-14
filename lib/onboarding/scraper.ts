@@ -6,6 +6,7 @@ import { isGoogleMapsUrl, scrapeGooglePlace } from './google-places-scraper';
 
 const anthropic = new Anthropic({
   authToken: process.env.ANTHROPIC_AUTH_TOKEN,
+  defaultHeaders: { 'anthropic-beta': 'oauth-2025-04-20' },
 });
 
 export interface ScrapedBrandContext {

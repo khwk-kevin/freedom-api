@@ -6,6 +6,7 @@ import Anthropic from '@anthropic-ai/sdk';
 
 const anthropic = new Anthropic({
   authToken: process.env.ANTHROPIC_AUTH_TOKEN,
+  defaultHeaders: { 'anthropic-beta': 'oauth-2025-04-20' },
 });
 
 export interface GooglePlaceData {

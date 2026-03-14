@@ -21,6 +21,9 @@ const router = Router();
 
 const client = new Anthropic({
   authToken: process.env.ANTHROPIC_AUTH_TOKEN,
+  defaultHeaders: {
+    'anthropic-beta': 'oauth-2025-04-20',
+  },
 });
 
 interface ChatMessage {

@@ -20,11 +20,17 @@ import { sshExecCommand, sshWriteFile } from './railway';
 
 function getClient(): Anthropic {
   // OAuth tokens only — no API keys. Same tokens powering OpenClaw/AVA.
+  // Requires anthropic-beta: oauth-2025-04-20 header for OAuth to work.
   const authToken = process.env.ANTHROPIC_AUTH_TOKEN;
   if (!authToken) {
     throw new Error('ANTHROPIC_AUTH_TOKEN is not set. OAuth token required.');
   }
-  return new Anthropic({ authToken });
+  return new Anthropic({
+    authToken,
+    defaultHeaders: {
+      'anthropic-beta': 'oauth-2025-04-20',
+    },
+  });
 }
 
 // ============================================================
