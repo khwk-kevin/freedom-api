@@ -19,7 +19,9 @@ import {
   runStaticBuild,
   gitPushBuild,
   cleanupBuildEnvironment,
+  getBuildService,
 } from '../build-service';
+import { sshExecCommand } from './railway';
 import { generateVaultFiles } from './vault-writer';
 import { saveMerchantApp } from './persistence';
 import { sanitizeErrorForUser } from './error-handler';
@@ -187,12 +189,37 @@ export async function deployMerchantApp(
     await prepareBuildEnvironment(cloneUrl, merchantId);
     progress('build_ready', 'Build environment ready ✓');
 
-    // ── Step 2: Write vault files ───────────────────────────
+    // ── Step 2: Write vault files (atomic — single exec to avoid container routing issues) ──
     progress('vault_start', 'Writing your app spec...');
     const vaultFiles = generateVaultFiles(spec);
-    for (const file of vaultFiles) {
-      await writeBuildFile(merchantId, file.path, file.content);
+    
+    // Build a single shell script that writes all vault files at once
+    const writeCommands = vaultFiles.map(file => {
+      const escaped = Buffer.from(file.content).toString('base64');
+      const dir = file.path.includes('/') ? file.path.split('/').slice(0, -1).join('/') : '';
+      const mkdirCmd = dir ? `mkdir -p "/workspace/builds/${merchantId}/${dir}" && ` : '';
+      return `${mkdirCmd}echo "${escaped}" | base64 -d > "/workspace/builds/${merchantId}/${file.path}"`;
+    }).join(' && ');
+    
+    const writeResult = await sshExecCommand(
+      getBuildService().projectId,
+      getBuildService().serviceId,
+      writeCommands
+    );
+    
+    if (writeResult.exitCode !== 0) {
+      console.error(`[deploy] Vault write failed: ${writeResult.stderr}`);
+      throw new Error(`Failed to write vault files: ${writeResult.stderr}`);
     }
+    
+    // Verify CLAUDE.md was written
+    const verifyResult = await sshExecCommand(
+      getBuildService().projectId,
+      getBuildService().serviceId,
+      `head -3 "/workspace/builds/${merchantId}/CLAUDE.md"`
+    );
+    console.log(`[deploy] CLAUDE.md verify: "${verifyResult.stdout.trim().slice(0, 100)}"`);
+    
     progress('vault_done', 'App spec saved ✓');
 
     // ── Step 3: Pass 1 — Structure & Layout ─────────────────
