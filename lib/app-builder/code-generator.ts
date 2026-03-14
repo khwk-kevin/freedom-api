@@ -825,7 +825,7 @@ function ServicesLayout({ spec, color, bg, textColor, textSecondary, cardBg, car
 
 function AppContent() {
   // Use hardcoded MERCHANT_SPEC instead of URL params
-  const spec = MERCHANT_SPEC as AppSpec;
+  const spec = MERCHANT_SPEC as unknown as AppSpec;
   const [activeTab, setActiveTab] = useState('home');
   const [activeModal, setActiveModal] = useState<string | null>(null);
 
