@@ -141,6 +141,9 @@ export async function prepareBuildEnvironment(
   if (installResult.exitCode !== 0) {
     throw new Error(`npm install failed: ${installResult.stderr}`);
   }
+
+  // Make build dir writable by builder user (Claude Code runs as builder, not root)
+  await sshExecCommand(projectId, serviceId, `chown -R builder:builder ${buildDir}`);
 }
 
 /**
@@ -188,7 +191,8 @@ export async function runClaudeCodeBuild(
     console.log(`[build-service] Claude Code build attempt ${attempt + 1}/${maxAttempts} (token #${index + 1})`);
 
     // Inject the OAuth token as env var prefix so Claude Code uses it
-    const cmd = `ANTHROPIC_API_KEY=${token} claude -p "${escapedPrompt}" --permission-mode bypassPermissions --max-turns 100 --cwd ${buildDir}`;
+    // Run as 'builder' user — Claude Code refuses --dangerously-skip-permissions as root
+    const cmd = `su builder -c 'ANTHROPIC_API_KEY=${token} claude -p "${escapedPrompt}" --dangerously-skip-permissions --max-turns 100 --cwd ${buildDir}' </dev/null`;
 
     const result = await sshExecCommand(projectId, serviceId, cmd);
 
