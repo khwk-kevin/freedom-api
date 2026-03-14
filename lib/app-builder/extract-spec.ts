@@ -219,6 +219,14 @@ interface ExtractedTags {
   DESIGN_REF?: string;
   FIRST_IMPRESSION?: string;
   INTERACTION_STYLE?: string;
+  // Product functionality tags (Phase 1b deep-dive)
+  CORE_ACTIONS?: string;
+  APP_FORMAT?: string;
+  KEY_SCREENS?: string;
+  MONETIZATION?: string;
+  DATA_MODEL?: string;
+  MVP_SCOPE?: string;
+  INTEGRATIONS?: string;
 }
 
 /**
@@ -318,6 +326,14 @@ function parseTagsFromResponse(aiResponse: string): ExtractedTags {
       case 'DESIGN_REF':
       case 'FIRST_IMPRESSION':
       case 'INTERACTION_STYLE':
+      // Product functionality tags
+      case 'CORE_ACTIONS':
+      case 'APP_FORMAT':
+      case 'KEY_SCREENS':
+      case 'MONETIZATION':
+      case 'DATA_MODEL':
+      case 'MVP_SCOPE':
+      case 'INTEGRATIONS':
         (tags as Record<string, string>)[tagName] = value;
         break;
       default:
@@ -347,15 +363,24 @@ function splitComma(value: string): string[] {
 function detectTriggers(tags: ExtractedTags, spec: ExtractedSpec): BuildTrigger[] {
   const triggers = new Set<BuildTrigger>(spec._triggers ?? []);
 
-  if (tags.BUSINESS_TYPE && tags.SCRAPE_URL) triggers.add('scrape_complete');
-  if (tags.BUSINESS_TYPE && tags.IDEA_DESCRIPTION) triggers.add('idea_described');
-  if (tags.MOOD) triggers.add('mood_selected');
-  if (tags.PRIMARY_COLOR) triggers.add('color_changed');
+  // Phase 1a triggers
+  if (tags.SCRAPE_URL) triggers.add('scrape_complete');
+  if (tags.IDEA_DESCRIPTION || tags.CORE_ACTIONS) triggers.add('idea_described');
+  if (tags.CORE_ACTIONS) triggers.add('core_actions_set');
+  if (tags.MONETIZATION) triggers.add('monetization_set');
+
+  // Phase 1b triggers
+  if (tags.KEY_SCREENS) triggers.add('key_screens_set');
+  if (tags.MVP_SCOPE) triggers.add('mvp_scope_set');
   if (tags.PRODUCTS_DETAIL) triggers.add('products_added');
+  if (tags.AUDIENCE) triggers.add('audience_defined');
   if (tags.PRIORITIES) triggers.add('priorities_set');
   if (tags.ANTI_PREFS) triggers.add('anti_prefs_set');
-  if (tags.AUDIENCE) triggers.add('audience_defined');
   if (tags.FEATURES) triggers.add('features_selected');
+
+  // Optional visual overrides (user-set, not default)
+  if (tags.MOOD) triggers.add('mood_selected');
+  if (tags.PRIMARY_COLOR) triggers.add('color_changed');
 
   return Array.from(triggers);
 }
@@ -508,6 +533,45 @@ export function updateSpecFromExtractions(
   // ── INTERACTION_STYLE ─────────────────────────────────────
   if (tags.INTERACTION_STYLE) {
     updated.interactionStyle = tags.INTERACTION_STYLE.trim();
+  }
+
+  // ── CORE_ACTIONS ──────────────────────────────────────────
+  if (tags.CORE_ACTIONS) {
+    updated.coreActions = splitComma(tags.CORE_ACTIONS);
+  }
+
+  // ── APP_FORMAT ────────────────────────────────────────────
+  if (tags.APP_FORMAT) {
+    const fmt = tags.APP_FORMAT.trim().toLowerCase();
+    const validFormats = ['interactive', 'landing', 'marketplace', 'tool', 'content', 'booking', 'game'] as const;
+    if ((validFormats as readonly string[]).includes(fmt)) {
+      updated.appFormat = fmt as typeof validFormats[number];
+    }
+  }
+
+  // ── KEY_SCREENS ───────────────────────────────────────────
+  if (tags.KEY_SCREENS) {
+    updated.keyScreens = splitComma(tags.KEY_SCREENS);
+  }
+
+  // ── MONETIZATION ──────────────────────────────────────────
+  if (tags.MONETIZATION) {
+    updated.monetizationModel = tags.MONETIZATION.trim();
+  }
+
+  // ── DATA_MODEL ────────────────────────────────────────────
+  if (tags.DATA_MODEL) {
+    updated.dataModel = tags.DATA_MODEL.trim();
+  }
+
+  // ── MVP_SCOPE ─────────────────────────────────────────────
+  if (tags.MVP_SCOPE) {
+    updated.mvpScope = tags.MVP_SCOPE.trim();
+  }
+
+  // ── INTEGRATIONS ──────────────────────────────────────────
+  if (tags.INTEGRATIONS) {
+    updated.integrations = splitComma(tags.INTEGRATIONS);
   }
 
   // ── STEP tags ─────────────────────────────────────────────

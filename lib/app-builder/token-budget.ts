@@ -9,15 +9,23 @@ import type { BuildTrigger } from './types';
 export const FREE_TIER_TOKENS = 10_000;
 
 const TOKEN_ESTIMATES: Record<BuildTrigger, number> = {
+  // Phase 1a — triggers a substantive build
   scrape_complete: 2000,
   idea_described: 2000,
+  core_actions_set: 1500,
+  monetization_set: 800,
+  // Phase 1b — incremental updates
+  key_screens_set: 1500,
+  mvp_scope_set: 1000,
   products_added: 1000,
-  priorities_set: 1000,
-  mood_selected: 500,
+  priorities_set: 800,
   audience_defined: 500,
   anti_prefs_set: 500,
   features_selected: 500,
+  // Visual overrides (usually auto-generated, cheap to apply)
+  mood_selected: 400,
   color_changed: 200,
+  // Iteration
   ad_hoc_request: 800,
 };
 

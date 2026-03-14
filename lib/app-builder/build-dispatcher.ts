@@ -23,25 +23,33 @@ import { sanitizeErrorForUser, shouldRetry, formatBuildError } from './error-han
 
 const TASK_TEMPLATES: Record<BuildTrigger, string> = {
   scrape_complete:
-    'Read CLAUDE.md. You have new context in context/ and photos in public/assets/. Build the homepage with Hero, product highlights, and contact section.',
+    'Read CLAUDE.md. You have new context in context/ and photos in public/assets/. Build the screens listed in CLAUDE.md Section 2, starting with the homepage.',
   idea_described:
-    'Read CLAUDE.md. The user described their app idea in context/business.md. Build a conceptual homepage that captures their vision.',
-  mood_selected:
-    'Mood and theme updated in design/theme.json and context/brand.md. Re-read them. Update all component variants and visual styles to match the new mood.',
-  color_changed:
-    'Primary color changed in design/theme.json. Update the CSS theme variables and ensure all pages reflect the new color scheme.',
+    'Read CLAUDE.md. The user described their app idea. Build the screens listed in Section 2 of CLAUDE.md, starting with the MVP scope from Section 4.',
+  core_actions_set:
+    'Read CLAUDE.md Section 3 (core actions). Ensure every key screen has UI flows that support these actions. Update or scaffold screens as needed.',
+  monetization_set:
+    'Monetization model captured — read CLAUDE.md for details. Implement the appropriate paywall/pricing/commission UI as described.',
+  key_screens_set:
+    'Key screens defined in CLAUDE.md Section 2. Scaffold all listed screens and wire up navigation between them.',
+  mvp_scope_set:
+    'MVP scope defined in CLAUDE.md Section 4. Build these features completely before anything else. They must be 100% functional at launch.',
   products_added:
-    'Products/services added to context/business.md. Build a products/services section using ProductCard components.',
+    'Products/services added to context/business.md. Build the catalog/menu/listing UI using these real items — no placeholders.',
   priorities_set:
-    'App priorities set in context/business.md. Build the priority pages and update navigation.',
+    'App priorities updated in context/business.md. Ensure the top-priority feature is the most prominent element in the app.',
   anti_prefs_set:
-    'Anti-preferences updated in context/brand.md. Review all existing pages and remove/adjust anything that conflicts.',
+    'Anti-preferences updated in context/brand.md. Review all existing pages and remove or adjust anything that conflicts.',
   audience_defined:
-    'Target audience defined in context/audience.md. Adjust copy, tone, and messaging across all pages.',
+    'Target audience defined in context/audience.md. Adjust copy, tone, and UX patterns to resonate with this specific audience.',
   features_selected:
-    'Freedom features selected. Note them in context/business.md for future integration.',
+    'Freedom platform features selected. Implement or stub each selected feature as described in context/business.md.',
+  mood_selected:
+    'Mood/theme updated in design/theme.json and context/brand.md. Re-read them. Update component variants and visual styles to match.',
+  color_changed:
+    'Primary color updated in design/theme.json. Update CSS theme variables and verify the new color appears correctly throughout.',
   ad_hoc_request:
-    "The merchant requests: '{adHocMsg}'. Read all context files first, then make the requested change.",
+    "The merchant requests: '{adHocMsg}'. Read CLAUDE.md and all context files first, then make the requested change.",
 };
 
 // ============================================================

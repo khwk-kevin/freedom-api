@@ -23,16 +23,20 @@ export type AppStatus =
 
 /** What triggered a build task */
 export type BuildTrigger =
-  | 'scrape_complete'    // Q2: scraper returned business data
-  | 'idea_described'     // Q2: idea path — description captured
-  | 'mood_selected'      // Q3: mood/vibe chosen
-  | 'color_changed'      // Q4: primary color set via picker
-  | 'products_added'     // Q5: products/services captured
-  | 'priorities_set'     // Q6: app priority order defined
-  | 'anti_prefs_set'     // Q7: anti-preferences captured
-  | 'audience_defined'   // Q8: target audience described
-  | 'features_selected'  // Q9: Freedom features chosen
-  | 'ad_hoc_request';    // Q10 / iteration: freeform merchant request
+  | 'scrape_complete'      // Q2: scraper returned business data
+  | 'idea_described'       // Q2: idea path — description + core actions captured
+  | 'core_actions_set'     // Q2: what users DO in the app is defined
+  | 'monetization_set'     // Q3: monetization model captured
+  | 'key_screens_set'      // Q4: key screen list defined
+  | 'mvp_scope_set'        // Q7: MVP scope (top 3 things) defined
+  | 'products_added'       // Q8: products/services captured
+  | 'audience_defined'     // Q9: target audience described
+  | 'priorities_set'       // priority order defined
+  | 'anti_prefs_set'       // anti-preferences captured
+  | 'features_selected'    // Freedom platform features chosen
+  | 'mood_selected'        // user explicitly set mood/vibe (optional — usually auto-generated)
+  | 'color_changed'        // user explicitly set primary color (optional — usually auto-generated)
+  | 'ad_hoc_request';      // iteration: freeform merchant request
 
 /** Build task lifecycle */
 export type BuildTaskStatus = 'queued' | 'running' | 'success' | 'failed';
@@ -46,21 +50,28 @@ export type VMStatus =
   | 'error'        // Failed state
   | 'stopped';     // Shut down (timeout / suspended)
 
-/** Interview funnel stages — maps 1:1 to PostHog drop-off funnel */
+/** Interview funnel stages — maps 1:1 to PostHog drop-off funnel
+ *
+ * Phase 1a (pre-signup): q1=app type, q2=core actions, q3=monetization
+ * Phase 1b (post-signup): q4=key screens, q5=user journey, q6=data model,
+ *                         q7=MVP scope, q8=products, q9=audience,
+ *                         q10=anti-prefs, q11=review
+ */
 export type FunnelStage =
   | 'page_view'
-  | 'q1'
-  | 'q2'
-  | 'q3'
-  | 'q4'
+  | 'q1'   // What kind of app?
+  | 'q2'   // What do users do? (core actions + source URL)
+  | 'q3'   // How does it make money? (monetization)
   | 'preview'
   | 'signup'
-  | 'q5'
-  | 'q6'
-  | 'q7'
-  | 'q8'
-  | 'q9'
-  | 'q10'
+  | 'q4'   // Key screens (infer + validate)
+  | 'q5'   // First 2 minutes (user journey)
+  | 'q6'   // Data model
+  | 'q7'   // MVP scope
+  | 'q8'   // Products / services (conditional)
+  | 'q9'   // Audience
+  | 'q10'  // Anti-prefs + design reference
+  | 'q11'  // Review + confirm
   | 'deploy'
   | 'return';
 
@@ -148,6 +159,15 @@ export interface MerchantAppSpec {
   designReference?: string;    // URL for design inspiration
   firstImpression?: string;    // "warm welcome with today's specials"
   interactionStyle?: string;   // "scroll-through catalog" or "swipeable cards"
+
+  // Product functionality (Phase 1b deep-dive)
+  monetizationModel?: string;  // "subscriptions" | "one-time purchase" | "freemium" | "ads" | "marketplace commission" | "tips/donations" | "free"
+  coreActions?: string[];      // What users DO in the app: ["browse menu", "place order", "track delivery"]
+  appFormat?: 'interactive' | 'landing' | 'marketplace' | 'tool' | 'content' | 'booking' | 'game';
+  keyScreens?: string[];       // "game board", "checkout", "dashboard", "profile", "search results"
+  dataModel?: string;          // "users have profiles, post listings, other users can bid on listings"
+  integrations?: string[];     // "stripe payments", "google maps", "email notifications"
+  mvpScope?: string;           // What's the minimum viable set to launch
 
   scrapedData?: ScrapedBusinessData;
 

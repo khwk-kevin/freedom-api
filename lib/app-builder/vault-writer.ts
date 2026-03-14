@@ -1,6 +1,6 @@
 /**
  * Freedom World App Builder — Vault Writer
- * Sprint 2.1
+ * Sprint 2.4
  *
  * DETERMINISTIC function (NO AI calls).
  * Maps MerchantAppSpec → markdown/JSON vault files.
@@ -9,6 +9,79 @@
  */
 
 import { MerchantAppSpec, VaultFile } from './types';
+
+// ============================================================
+// BRAND DEFAULTS — auto-generated from app category
+// ============================================================
+
+export interface DefaultBrand {
+  mood: string;
+  primaryColor: string;
+  uiStyle: string;
+  moodKeywords: string[];
+}
+
+/**
+ * Returns sensible brand defaults based on the app category/type.
+ * Used when the user hasn't specified any visual preferences.
+ * Visual customization is a post-launch paid feature — we pick
+ * a strong, appropriate default and let them refine later.
+ */
+export function getDefaultBrandForCategory(
+  businessType?: string,
+  appFormat?: string,
+): DefaultBrand {
+  const bt = (businessType || '').toLowerCase();
+  const fmt = (appFormat || '').toLowerCase();
+
+  // Game
+  if (fmt === 'game' || bt.includes('game') || bt.includes('gaming')) {
+    return { mood: 'playful', primaryColor: '#7C3AED', uiStyle: 'filled', moodKeywords: ['vibrant', 'energetic', 'bold', 'fun'] };
+  }
+
+  // Marketplace / e-commerce
+  if (fmt === 'marketplace' || bt.includes('marketplace') || bt.includes('ecommerce') || bt.includes('shop') || bt.includes('store') || bt.includes('retail') || bt.includes('boutique')) {
+    return { mood: 'bold', primaryColor: '#0EA5E9', uiStyle: 'outlined', moodKeywords: ['clean', 'trustworthy', 'modern', 'sharp'] };
+  }
+
+  // Restaurant / food
+  if (bt.includes('restaurant') || bt.includes('cafe') || bt.includes('food') || bt.includes('bakery') || bt.includes('bar') || bt.includes('bistro') || bt.includes('kitchen')) {
+    return { mood: 'warm', primaryColor: '#EA580C', uiStyle: 'rounded', moodKeywords: ['warm', 'inviting', 'earthy', 'appetizing'] };
+  }
+
+  // Fitness / wellness / health
+  if (bt.includes('gym') || bt.includes('fitness') || bt.includes('yoga') || bt.includes('wellness') || bt.includes('health') || bt.includes('spa') || bt.includes('salon') || bt.includes('beauty')) {
+    return { mood: 'minimal', primaryColor: '#10B981', uiStyle: 'rounded', moodKeywords: ['clean', 'calm', 'fresh', 'focused'] };
+  }
+
+  // Tools / SaaS / productivity
+  if (fmt === 'tool' || bt.includes('tool') || bt.includes('saas') || bt.includes('productivity') || bt.includes('analytics') || bt.includes('dashboard')) {
+    return { mood: 'minimal', primaryColor: '#2563EB', uiStyle: 'outlined', moodKeywords: ['minimal', 'precise', 'efficient', 'professional'] };
+  }
+
+  // Booking / services
+  if (fmt === 'booking' || bt.includes('booking') || bt.includes('appointment') || bt.includes('service') || bt.includes('consulting') || bt.includes('agency')) {
+    return { mood: 'elegant', primaryColor: '#6366F1', uiStyle: 'rounded', moodKeywords: ['professional', 'trustworthy', 'polished', 'calm'] };
+  }
+
+  // Community / content / social
+  if (fmt === 'content' || bt.includes('community') || bt.includes('social') || bt.includes('blog') || bt.includes('news') || bt.includes('media')) {
+    return { mood: 'bold', primaryColor: '#F59E0B', uiStyle: 'rounded', moodKeywords: ['lively', 'social', 'expressive', 'engaging'] };
+  }
+
+  // Portfolio / creative
+  if (bt.includes('portfolio') || bt.includes('photography') || bt.includes('design') || bt.includes('art') || bt.includes('creative') || bt.includes('freelance')) {
+    return { mood: 'elegant', primaryColor: '#1E293B', uiStyle: 'minimal', moodKeywords: ['elegant', 'refined', 'curated', 'minimal'] };
+  }
+
+  // Landing / startup / idea
+  if (fmt === 'landing' || bt.includes('startup') || bt.includes('launch') || bt.includes('idea')) {
+    return { mood: 'bold', primaryColor: '#10F48B', uiStyle: 'outlined', moodKeywords: ['fresh', 'bold', 'exciting', 'modern'] };
+  }
+
+  // Default: clean modern blue — safe for any unknown category
+  return { mood: 'minimal', primaryColor: '#3B82F6', uiStyle: 'outlined', moodKeywords: ['clean', 'modern', 'accessible', 'clear'] };
+}
 
 // ============================================================
 // TYPES
@@ -1636,163 +1709,335 @@ _${L.notSet}_
  * Handles incomplete specs gracefully — never throws.
  */
 /**
- * CLAUDE.md — THE UNIQUE BUILD INSTRUCTION FOR THIS SPECIFIC APP.
- * 
- * This is NOT a generic template. Every field comes from the user's interview.
- * Claude Code reads this first and builds exactly what the user asked for.
+ * CLAUDE.md — THE BUILD SPECIFICATION FOR THIS APP.
+ *
+ * This is NOT a generic template. It leads with FUNCTIONAL requirements:
+ * what screens to build, what users do, what data exists, what launches first.
+ * Visual/brand details follow — they are secondary.
+ *
+ * Claude Code reads this file first. It must contain enough to build
+ * the app without any additional context.
  */
 export function generateClaudeMd(spec: Partial<MerchantAppSpec>): string {
   const name = spec.businessName || 'Your App';
-  const type = spec.businessType || spec.category || 'app';
-  const fonts = detectFontForLanguage(spec.primaryLanguage || 'en');
-  const primaryColor = spec.primaryColor || '#10F48B';
-  const mood = spec.mood || 'modern';
-  const uiStyle = spec.uiStyle || 'outlined';
+  const type = spec.businessType || spec.appFormat || spec.category || 'app';
+  const lang = spec.primaryLanguage || 'en';
+  const fonts = detectFontForLanguage(lang);
 
-  // Build the description from all available data
+  // Resolve brand — user-set values override auto-generated defaults
+  const brandDefaults = getDefaultBrandForCategory(spec.businessType, spec.appFormat);
+  const primaryColor = spec.primaryColor || brandDefaults.primaryColor;
+  const mood = spec.mood || brandDefaults.mood;
+  const uiStyle = spec.uiStyle || brandDefaults.uiStyle;
+  const brandSource = spec.primaryColor ? 'user-specified' : 'auto-generated for this app type';
+
+  // Full app description
   const descParts: string[] = [];
   if (spec.ideaDescription) descParts.push(spec.ideaDescription);
   if (spec.scrapedData?.description) descParts.push(spec.scrapedData.description);
-  const description = descParts.join('\n') || `A ${type} app called ${name}.`;
+  const description = descParts.join(' ').trim() || `A ${type} app called ${name}.`;
 
-  // Products / items / content
+  // ── Section: Core actions ──────────────────────────────────
+  let coreActionsSection = '';
+  if (spec.coreActions?.length) {
+    coreActionsSection = `
+## Core Actions (what users DO)
+These are the primary interactions — every screen should support at least one of these:
+${spec.coreActions.map((a) => `- ${a}`).join('\n')}
+
+Build UI flows that make each action feel effortless. The most important action is **${spec.coreActions[0]}**.`;
+  }
+
+  // ── Section: Key screens ───────────────────────────────────
+  let screensSection = '';
+  if (spec.keyScreens?.length) {
+    screensSection = `
+## Screens to Build
+Build EXACTLY these screens — in this order (earlier = higher priority):
+${spec.keyScreens.map((s, i) => `${i + 1}. **${s}**`).join('\n')}
+
+Each screen must be fully functional, not a placeholder. Use real content from context/business.md.`;
+  } else {
+    // Fallback: infer screens from business type
+    screensSection = `
+## Screens to Build
+No explicit screen list provided — infer appropriate screens for a **${type}** app.
+Use context/business.md and context/audience.md to shape the content of each screen.`;
+  }
+
+  // ── Section: MVP scope ─────────────────────────────────────
+  let mvpSection = '';
+  if (spec.mvpScope) {
+    mvpSection = `
+## Build This First (MVP)
+The user defined the minimum viable launch as:
+**${spec.mvpScope}**
+
+Build these features COMPLETELY before touching anything else.
+Non-MVP screens can be stubs with "Coming soon" if needed — MVP screens must be 100% functional.`;
+  }
+
+  // ── Section: User journey ──────────────────────────────────
+  let journeySection = '';
+  if (spec.userJourney) {
+    journeySection = `
+## User Journey (new user's first experience)
+${spec.userJourney}
+
+The first screen a new user sees is the most important. Make it immediately clear what the app does and what to do next.`;
+    if (spec.firstImpression) {
+      journeySection += `\n\n**First impression:** ${spec.firstImpression}`;
+    }
+  }
+
+  // ── Section: Data model ────────────────────────────────────
+  let dataModelSection = '';
+  if (spec.dataModel) {
+    dataModelSection = `
+## Data Model
+${spec.dataModel}
+
+Build your components and pages around this data structure. Use realistic mock data that matches this model — never use "Lorem ipsum" or "Sample Item 1".`;
+  }
+
+  // ── Section: Monetization ──────────────────────────────────
+  let monetizationSection = '';
+  if (spec.monetizationModel && spec.monetizationModel !== 'free') {
+    const monetizationInstructions: Record<string, string> = {
+      'subscriptions': 'Include a pricing/plans screen. Gate premium features behind a paywall UI (show locked state with upgrade prompt). Do NOT implement actual payment processing — use a mock "Subscribe" button that shows a confirmation.',
+      'one-time purchase': 'Include a purchase screen with a clear price and "Buy Now" CTA. Show the value proposition clearly before the paywall.',
+      'freemium': 'Core features are free and fully functional. Premium features show a locked state with upgrade prompt. Include an upgrade/pricing screen.',
+      'ads': 'Reserve ad placement slots in the layout (header banner, between-content slots). Use placeholder ad boxes — do NOT integrate a real ad SDK.',
+      'marketplace commission': 'The platform takes a % of each transaction. Show seller fees and buyer prices clearly. Include a transaction/earnings screen if relevant.',
+      'tips/donations': 'Include a tipping or donation UI at natural moments (after completing an action, on the creator\'s profile). Keep it unobtrusive.',
+    };
+    const instruction = monetizationInstructions[spec.monetizationModel] || `Implement UI for: ${spec.monetizationModel}`;
+    monetizationSection = `
+## Monetization: ${spec.monetizationModel}
+${instruction}`;
+  }
+
+  // ── Section: Products / items ─────────────────────────────
   let productsSection = '';
   if (spec.products?.length) {
-    productsSection = `\n## Products / Items / Content\nBuild pages and UI for these REAL items:\n${spec.products.map(p => {
-      const parts = [`- **${p.name}**`];
-      if (p.description) parts.push(`: ${p.description}`);
-      if (p.price != null) parts.push(` (${p.currency || ''}${p.price})`);
-      if (p.category) parts.push(` [${p.category}]`);
-      return parts.join('');
-    }).join('\n')}\n\nDo NOT use placeholder products. Use these exact items with real names and prices.`;
+    productsSection = `
+## Real Content: Products / Items
+Use these EXACT items — not placeholders. Build the catalog/menu/listing UI around them:
+${spec.products.map((p) => {
+  const parts = [`- **${p.name}**`];
+  if (p.description) parts.push(`: ${p.description}`);
+  if (p.price != null) parts.push(` — ${p.currency || ''}${p.price}`);
+  if (p.category) parts.push(` [${p.category}]`);
+  return parts.join('');
+}).join('\n')}
+
+Total: ${spec.products.length} items. If there are categories, build a tabbed or filtered view.`;
   }
 
-  // Priorities — what matters most
+  // ── Section: Integrations ─────────────────────────────────
+  let integrationsSection = '';
+  if (spec.integrations?.length) {
+    integrationsSection = `
+## Integrations Required
+${spec.integrations.map((i) => `- ${i}`).join('\n')}
+
+Implement UI stubs for all integrations. Real API calls can be mocked — the UI flow must be complete.`;
+  }
+
+  // ── Section: Priority order ────────────────────────────────
   let prioritiesSection = '';
   if (spec.appPriorities?.length) {
-    prioritiesSection = `\n## Feature Priority (in order of importance)\n${spec.appPriorities.map((p, i) => `${i + 1}. ${p}`).join('\n')}\n\nBuild the #1 priority feature FIRST and make it the hero of the app.`;
+    prioritiesSection = `
+## Feature Priority
+${spec.appPriorities.map((p, i) => `${i + 1}. ${p}`).join('\n')}
+
+Build in this order. The #1 item is the reason this app exists — make it perfect before moving on.`;
   }
 
-  // Anti-preferences — what to avoid
-  let antiSection = '';
-  if (spec.antiPreferences?.length) {
-    antiSection = `\n## DO NOT\n${spec.antiPreferences.map(a => `- ❌ ${a}`).join('\n')}`;
-  }
-
-  // Audience
+  // ── Section: Audience ──────────────────────────────────────
   let audienceSection = '';
   if (spec.audienceDescription) {
-    audienceSection = `\n## Target Audience\n${spec.audienceDescription}\n\nDesign every interaction for THIS audience. Use language, imagery, and UX patterns that resonate with them.`;
+    audienceSection = `
+## Target Audience
+${spec.audienceDescription}
+
+Calibrate every word of copy, every interaction pattern, and every visual decision to this audience.`;
   }
 
-  // Selected features
+  // ── Section: Features ──────────────────────────────────────
   let featuresSection = '';
   if (spec.selectedFeatures?.length) {
-    featuresSection = `\n## Required Features\nThe user specifically requested these features — build ALL of them:\n${spec.selectedFeatures.map(f => `- ✅ ${f}`).join('\n')}`;
+    featuresSection = `
+## Required Platform Features
+Build ALL of these — they were explicitly requested:
+${spec.selectedFeatures.map((f) => `- ✅ ${f}`).join('\n')}`;
   }
 
-  // Location / scraped data
+  // ── Section: Anti-preferences ─────────────────────────────
+  let antiSection = '';
+  if (spec.antiPreferences?.length) {
+    antiSection = `
+## DO NOT
+${spec.antiPreferences.map((a) => `- ❌ ${a}`).join('\n')}`;
+  }
+
+  // ── Section: Location / scraped data ─────────────────────
   let locationSection = '';
   if (spec.scrapedData?.address) {
-    locationSection = `\n## Location\n- Address: ${spec.scrapedData.address}`;
-    if (spec.scrapedData.phone) locationSection += `\n- Phone: ${spec.scrapedData.phone}`;
+    const locationLines = [`- Address: ${spec.scrapedData.address}`];
+    if (spec.scrapedData.phone) locationLines.push(`- Phone: ${spec.scrapedData.phone}`);
     if (spec.scrapedData.hours) {
-      const hoursStr = Object.entries(spec.scrapedData.hours).map(([d, h]) => `${d}: ${h}`).join(', ');
-      locationSection += `\n- Hours: ${hoursStr}`;
+      const hoursStr = Object.entries(spec.scrapedData.hours)
+        .map(([d, h]) => `${d}: ${h}`)
+        .join(' | ');
+      locationLines.push(`- Hours: ${hoursStr}`);
     }
-    if (spec.scrapedData.rating) locationSection += `\n- Rating: ${spec.scrapedData.rating}/5`;
+    if (spec.scrapedData.rating) locationLines.push(`- Rating: ${spec.scrapedData.rating}/5`);
+    locationSection = `
+## Real Location Data (use in contact/location screens)
+${locationLines.join('\n')}`;
   }
 
-  return `# ${name}
+  // ── Section: Design system ────────────────────────────────
+  const bgColor = spec.scrapedData?.backgroundColor
+    || (['luxury', 'dark', 'moody', 'gaming'].includes(mood) ? '#0F0F1A' : '#ffffff');
+  const bgSource = spec.scrapedData?.backgroundColor
+    ? 'from scraped brand website'
+    : (['luxury', 'dark', 'moody', 'gaming'].includes(mood) ? 'dark mood' : 'light theme');
 
+  return `# ${name}
 > ${description}
 
-## What This App Is
-This is a **${type}** app called **${name}**.
-The user described it as: "${description}"
+---
 
-This is NOT a generic template. Build EXACTLY what the user asked for.
-Every page, every component, every interaction should reflect this specific app's purpose.
+## 1. What This App Is
+
+**Type:** ${type}
+**Name:** ${name}
+**Description:** ${description}
+
+This is a real app built for real users. Every screen, interaction, and piece of copy
+must reflect what the user actually asked for. Do not build a generic template.
+
+---
+
+## 2. Build These Screens
+${screensSection.trim()}
+
+---
+
+## 3. What Users Do
+${coreActionsSection.trim() || `No explicit action list — infer appropriate interactions for a ${type} app.`}
+
+---
+
+## 4. Launch Priority (MVP)
+${mvpSection.trim() || `No explicit MVP defined — use judgment to build the most essential screens first.\nFor a ${type} app, that typically means: the core feature, a way to navigate, and a way to get started.`}
+
+---
+
+## 5. User Journey
+${journeySection.trim() || `No explicit journey captured — design the new user experience for a ${type} app.\nFirst screen should immediately communicate what the app does and what to do next.`}
+
+---
+
+## 6. Data Model
+${dataModelSection.trim() || `No explicit data model — infer appropriate entities for a ${type} app.\nUse realistic mock data. No "Lorem ipsum", no "Sample Item 1".`}
+${monetizationSection}
+${productsSection}
+${integrationsSection}
+${prioritiesSection}
+${audienceSection}
+${featuresSection}
+${antiSection}
+${locationSection}
+
+---
 
 ## Design System
+> Brand is ${brandSource}. Users can customize colors and style in the app console.
+
 - **Primary color:** ${primaryColor}
-- **Mood/vibe:** ${mood}
+- **Mood:** ${mood} (${brandDefaults.moodKeywords.join(', ')})
 - **UI style:** ${uiStyle}
 - **Heading font:** ${fonts.heading}
 - **Body font:** ${fonts.body}
-- **Background:** ${spec.scrapedData?.backgroundColor || (['luxury', 'dark', 'bold', 'edgy', 'moody', 'gaming'].includes(mood) ? '#0F0F1A' : '#ffffff')} (${spec.scrapedData?.backgroundColor ? 'from brand website' : (['luxury', 'dark', 'bold', 'edgy', 'moody', 'gaming'].includes(mood) ? 'dark mood' : 'light theme')})
-- **Language:** ${spec.primaryLanguage || 'en'}
+- **Background:** ${bgColor} (${bgSource})
+- **Language:** ${lang}
 
-Read design/theme.json for full color tokens. NEVER hardcode colors — use the theme. The background and foreground colors MUST match the theme.json values.
-${productsSection}
-${prioritiesSection}
-${antiSection}
-${audienceSection}
-${featuresSection}
-${locationSection}
+Full token set in \`design/theme.json\`. **Never hardcode hex values** — use theme tokens only.
+Background and foreground MUST match theme.json values exactly.
+
+---
 
 ## Build Rules
-1. **Mobile-first.** Everything must work perfectly at 375px width.
-2. **Real content only.** Use data from context/business.md. No "Lorem ipsum", no "Your Business Here".
-3. **Real photos** from /public/assets/ if available. No placeholder images.
-4. **All styling via Tailwind** using theme tokens from design/theme.json. No inline hex colors.
-5. **TypeScript + Next.js App Router.** Every component needs "use client" if it has state/effects.
-6. **Use the EXACT background color from design/theme.json** — do NOT default to dark. If theme says light background, use light. If dark, use dark.
-7. **The app should feel UNIQUE** — not like a cookie-cutter template. The layout, sections, and interactions should make sense for a ${type} app specifically.
+1. **Screens first.** Build every screen in Section 2 before styling anything.
+2. **MVP first.** Section 4 defines what must work at launch. Do it first.
+3. **Mobile-first.** Every screen must work at 375px width.
+4. **Real content only.** Use names, items, and copy from context/business.md. No placeholders.
+5. **Real photos** from \`/public/assets/\` if available. Gradient placeholders if not — never broken images.
+6. **TypeScript + Next.js App Router.** \`"use client"\` on every component with state or effects.
+7. **Tailwind only.** Use theme tokens. No inline styles, no hardcoded colors.
+8. **Unique, not generic.** This is a ${type} app — it should look and feel like one, not like a template.
 
-## Pages to Build
-Build these pages based on what makes sense for a **${type}** app:
-- **Homepage** — Hero section that captures the essence of ${name}. Not a generic hero.
-- **Main feature page** — ${spec.appPriorities?.[0] || `The core feature of a ${type}`}
-${spec.products?.length ? `- **Products/Items page** — Grid or list of ${spec.products.length} items with details` : ''}
-${spec.audienceDescription ? `- **About page** — Story that resonates with the target audience` : ''}
-- **Contact page** — ${spec.scrapedData?.address ? 'With real address and map' : 'Simple contact form'}
+---
 
-## Quality Check
-Before finishing:
-- [ ] Every page uses the correct primary color (${primaryColor})
-- [ ] No placeholder text anywhere
-- [ ] Mobile layout works at 375px
-- [ ] All TypeScript compiles without errors
-- [ ] The app looks and feels like a **${type}** app, not a generic template
+## Quality Checklist
+Before finishing, verify:
+- [ ] All screens from Section 2 are built and navigable
+- [ ] MVP features (Section 4) are fully functional
+- [ ] Primary color \`${primaryColor}\` appears correctly throughout
+- [ ] No placeholder text anywhere in the app
+- [ ] Mobile layout correct at 375px
+- [ ] TypeScript compiles with zero errors (\`npx tsc --noEmit\`)
+- [ ] App feels like a **${type}** app, not a generic starter template
 `;
 }
 
 export function generateVaultFiles(spec: Partial<MerchantAppSpec>): VaultFile[] {
   const files: VaultFile[] = [];
 
-  // CLAUDE.md — the unique build instruction for THIS app
-  files.push({ path: 'CLAUDE.md', content: generateClaudeMd(spec) });
+  // Apply brand defaults when user hasn't specified visual preferences.
+  // This gives every app a coherent theme without asking about it in the interview.
+  const brandDefaults = getDefaultBrandForCategory(spec.businessType, spec.appFormat);
+  const effectiveSpec: Partial<MerchantAppSpec> = {
+    ...spec,
+    mood: spec.mood ?? brandDefaults.mood,
+    primaryColor: spec.primaryColor ?? brandDefaults.primaryColor,
+    moodKeywords: spec.moodKeywords?.length ? spec.moodKeywords : brandDefaults.moodKeywords,
+    uiStyle: spec.uiStyle ?? brandDefaults.uiStyle,
+  };
 
-  // Always generate context files (overwrite on every spec update)
-  files.push({ path: 'context/brand.md', content: generateBrandMd(spec) });
-  files.push({ path: 'context/business.md', content: generateBusinessMd(spec) });
-  files.push({ path: 'context/audience.md', content: generateAudienceMd(spec) });
+  // CLAUDE.md — functional build spec for this app
+  files.push({ path: 'CLAUDE.md', content: generateClaudeMd(effectiveSpec) });
 
-  // Always generate theme.json
-  files.push({ path: 'design/theme.json', content: generateThemeJson(spec) });
+  // Context files — overwrite on every spec update
+  files.push({ path: 'context/brand.md', content: generateBrandMd(effectiveSpec) });
+  files.push({ path: 'context/business.md', content: generateBusinessMd(effectiveSpec) });
+  files.push({ path: 'context/audience.md', content: generateAudienceMd(effectiveSpec) });
 
-  // Always generate active skill pointer
-  files.push({ path: 'skills/_active.md', content: generateActiveSkillMd(spec) });
+  // Design tokens
+  files.push({ path: 'design/theme.json', content: generateThemeJson(effectiveSpec) });
 
-  // Generate the category-specific build recipe skill file
-  const category = getCategoryFromBusinessType(spec.businessType);
+  // Build skill pointer
+  files.push({ path: 'skills/_active.md', content: generateActiveSkillMd(effectiveSpec) });
+
+  // Category-specific build recipe
+  const category = getCategoryFromBusinessType(effectiveSpec.businessType);
   files.push({
     path: `skills/build/${category}.md`,
-    content: generateCategorySkillMd(spec, category),
+    content: generateCategorySkillMd(effectiveSpec, category),
   });
 
-  // Only generate mood decision files if mood is set
-  if (spec.mood) {
-    files.push({
-      path: 'context/decisions/001-visual-mood.md',
-      content: generateMoodDecisionMd(spec),
-    });
-    files.push({
-      path: 'context/decisions/_index.md',
-      content: generateDecisionIndex(spec),
-    });
-  }
+  // Mood decision log — always generated now (we always have a mood via defaults)
+  files.push({
+    path: 'context/decisions/001-visual-mood.md',
+    content: generateMoodDecisionMd(effectiveSpec),
+  });
+  files.push({
+    path: 'context/decisions/_index.md',
+    content: generateDecisionIndex(effectiveSpec),
+  });
 
   return files;
 }
