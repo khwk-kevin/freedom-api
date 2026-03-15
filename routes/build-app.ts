@@ -19,6 +19,7 @@ import {
 } from '../lib/app-builder/app-spec';
 import { createMerchantRepo, repoExists } from '../lib/app-builder/github';
 import { deployMerchantApp } from '../lib/app-builder/deploy';
+import { startBuild, addStep, getProgress } from '../lib/app-builder/build-progress';
 import type { MerchantAppSpec } from '../lib/app-builder/types';
 
 const router = Router();
@@ -148,108 +149,146 @@ router.post('/', async (req: Request, res: Response) => {
 
   const businessName = appSpec.identity.name || 'Your App';
 
-  // Set up SSE
+  const merchantSpec: MerchantAppSpec = {
+    ...(appSpec as unknown as Record<string, unknown>),
+    id: merchantId,
+    slug: '',
+    region: 'SEA',
+    appType: 'business',
+    primaryLanguage: 'en',
+    tokenBalance: 0,
+    tokenUsed: 0,
+    businessName,
+    businessType: appSpec.identity.type || appSpec.identity.category || 'other',
+    category: appSpec.identity.category || 'other',
+    uiStyle: (appSpec.brand as Record<string, unknown>).uiStyle as string || 'outlined',
+    coreActions: appSpec.features.primaryActions.length > 0
+      ? appSpec.features.primaryActions
+      : undefined,
+    ideaDescription: appSpec.identity.description,
+    audienceDescription: appSpec.audience.description,
+    primaryColor: appSpec.brand.primaryColor,
+    mood: appSpec.brand.vibe,
+    conversionGoal: appSpec.features.heroFeature,
+    status: 'building',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  } as MerchantAppSpec;
+
+  // ── Start build tracking ──────────────────────────────
+  startBuild(merchantId);
+
+  // Progress callback — writes to both SSE stream (if alive) and in-memory store
+  let sseAlive = true;
+  const progress = (step: string, message: string, extra?: Record<string, unknown>) => {
+    const data = { event: 'progress', step, message, ...extra };
+    addStep(merchantId, data);
+    if (sseAlive) {
+      try { sendSSE(res, data); } catch { sseAlive = false; }
+    }
+  };
+
+  // Set up SSE headers
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
     'Connection': 'keep-alive',
-    'X-Accel-Buffering': 'no', // Disable Railway/nginx buffering
+    'X-Accel-Buffering': 'no',
   });
 
-  // Keepalive ping every 15s to prevent proxy timeout
+  // Keepalive ping every 10s
   const keepalive = setInterval(() => {
-    try { res.write(': keepalive\n\n'); } catch { /* ignore */ }
-  }, 15_000);
-
-  try {
-    // ── Step 1: Provision GitHub repo ─────────────────────
-    sendSSE(res, {
-      event: 'progress',
-      step: 'provision_start',
-      message: 'Setting up your app...',
-    });
-
-    const exists = await repoExists(merchantId);
-    if (!exists) {
-      await createMerchantRepo(merchantId, appSpec.identity.category || 'business');
-      // GitHub template generation is async — wait for files to be ready
-      await new Promise(resolve => setTimeout(resolve, 8000));
+    if (sseAlive) {
+      try { res.write(': keepalive\n\n'); } catch { sseAlive = false; }
     }
+  }, 10_000);
 
-    sendSSE(res, {
-      event: 'progress',
-      step: 'provision_github',
-      message: 'Repository created ✓',
-    });
+  // Detect client disconnect
+  res.on('close', () => { sseAlive = false; });
 
-    // ── Steps 2-8: Full deploy pipeline ─────────────────
-    const merchantSpec: MerchantAppSpec = {
-      ...(appSpec as unknown as Record<string, unknown>),
-      id: merchantId,
-      slug: '',
-      region: 'SEA',
-      appType: 'business',
-      primaryLanguage: 'en',
-      tokenBalance: 0,
-      tokenUsed: 0,
-      businessName,
-      businessType: appSpec.identity.type || appSpec.identity.category || 'other',
-      category: appSpec.identity.category || 'other',
-      uiStyle: (appSpec.brand as Record<string, unknown>).uiStyle as string || 'outlined',
-      // Pass through coreActions for the code generator
-      coreActions: appSpec.features.primaryActions.length > 0
-        ? appSpec.features.primaryActions
-        : undefined,
-      ideaDescription: appSpec.identity.description,
-      audienceDescription: appSpec.audience.description,
-      primaryColor: appSpec.brand.primaryColor,
-      mood: appSpec.brand.vibe,
-      conversionGoal: appSpec.features.heroFeature,
-      status: 'building',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    } as MerchantAppSpec;
+  // ── Run build pipeline (async — doesn't block SSE response) ──
+  const runBuild = async () => {
+    try {
+      // Step 1: Provision GitHub repo
+      progress('provision_start', 'Setting up your app...');
 
-    const result = await deployMerchantApp(
-      merchantId,
-      merchantSpec,
-      (step, message) => {
-        sendSSE(res, { event: 'progress', step, message });
+      const exists = await repoExists(merchantId);
+      if (!exists) {
+        await createMerchantRepo(merchantId, appSpec.identity.category || 'business');
+        await new Promise(resolve => setTimeout(resolve, 8000));
       }
-    );
 
-    if ('error' in result) {
-      sendSSE(res, {
+      progress('provision_github', 'Repository created ✓');
+
+      // Steps 2-8: Full deploy pipeline
+      const result = await deployMerchantApp(
+        merchantId,
+        merchantSpec,
+        (step, message) => progress(step, message)
+      );
+
+      if ('error' in result) {
+        const errorData = {
+          event: 'error',
+          step: 'deploy_failed',
+          message: result.error,
+          details: result.buildLogs,
+        };
+        addStep(merchantId, errorData);
+        if (sseAlive) { try { sendSSE(res, errorData); } catch { sseAlive = false; } }
+      } else {
+        const completeData = {
+          event: 'complete',
+          step: 'done',
+          message: `${businessName} is live! 🎉`,
+          devUrl: result.productionUrl,
+          projectId: merchantId,
+          completeness,
+        };
+        addStep(merchantId, completeData);
+        if (sseAlive) { try { sendSSE(res, completeData); } catch { sseAlive = false; } }
+      }
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      console.error('[build-app] Pipeline error:', error.message);
+
+      const errorData = {
         event: 'error',
-        step: 'deploy_failed',
-        message: result.error,
-        details: result.buildLogs,
-      });
-    } else {
-      sendSSE(res, {
-        event: 'complete',
-        step: 'done',
-        message: `${businessName} is live! 🎉`,
-        devUrl: result.productionUrl,
-        appSpec,
-        projectId: merchantId,
-        completeness,
-      });
+        step: 'pipeline_error',
+        message: error.message || 'Something went wrong.',
+        details: error.message,
+      };
+      addStep(merchantId, errorData);
+      if (sseAlive) { try { sendSSE(res, errorData); } catch { sseAlive = false; } }
+    } finally {
+      clearInterval(keepalive);
+      if (sseAlive) { try { res.end(); } catch { /* ignore */ } }
     }
-  } catch (err) {
-    const error = err instanceof Error ? err : new Error(String(err));
-    console.error('[build-app] Pipeline error:', error.message);
+  };
 
-    sendSSE(res, {
-      event: 'error',
-      step: 'pipeline_error',
-      message: 'Something went wrong. Our team has been notified.',
-      details: error.message,
-    });
-  } finally {
-    clearInterval(keepalive);
-    res.end();
+  // Fire and forget — don't await
+  runBuild();
+
+  // Send initial data immediately so the SSE stream starts flowing
+  // (Railway proxy won't buffer if it sees data within the first few seconds)
+  sendSSE(res, { event: 'progress', step: 'init', message: 'Build started...' });
+});
+
+// ── GET /apps/build-app/progress — Poll build progress ──────
+router.get('/progress', (req: Request, res: Response) => {
+  const merchantId = req.query.merchantId as string;
+  const afterIndex = parseInt(req.query.after as string || '0', 10);
+
+  if (!merchantId) {
+    return res.status(400).json({ error: 'merchantId required' });
   }
+
+  const progress = getProgress(merchantId, afterIndex);
+  if (!progress) {
+    return res.json({ steps: [], isComplete: false, isError: false, totalSteps: 0 });
+  }
+
+  return res.json(progress);
 });
 
 export default router;
